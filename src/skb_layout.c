@@ -3275,6 +3275,58 @@ bool skb_layout_iterate_render_glyphs(const skb_layout_t* layout, skb_layout_ren
 	return true;
 }
 
+typedef struct skb__prepare_glyphs_context_t {
+	skb_image_atlas_t* atlas;
+	skb_font_collection_t* font_collection;
+	float pixel_scale;
+	skb_rasterize_alpha_mode_t alpha_mode;
+	bool valid;
+} skb__prepare_glyphs_context_t;
+
+static bool skb__prepare_render_glyph(const skb_layout_render_glyph_t* glyph, void* context)
+{
+	skb__prepare_glyphs_context_t* prepare = (skb__prepare_glyphs_context_t*)context;
+	const skb_quad_t quad = skb_image_atlas_get_glyph_quad(
+		prepare->atlas, 0.f, 0.f, prepare->pixel_scale, prepare->font_collection,
+		glyph->font_handle, glyph->glyph_id, glyph->font_size, glyph->color, prepare->alpha_mode);
+	if (quad.flags & SKB_QUAD_IS_EMPTY)
+		return true;
+
+	const int32_t texture_count = skb_image_atlas_get_texture_count(prepare->atlas);
+	if (quad.texture_idx >= texture_count || quad.pattern.width <= 0.f || quad.pattern.height <= 0.f) {
+		prepare->valid = false;
+		return false;
+	}
+	return true;
+}
+
+bool skb_layout_prepare_glyphs(
+	const skb_layout_t* layout, skb_image_atlas_t* atlas, skb_temp_alloc_t* temp_alloc,
+	skb_rasterizer_t* rasterizer, float pixel_scale, skb_rasterize_alpha_mode_t alpha_mode)
+{
+	assert(layout);
+	assert(atlas);
+	assert(temp_alloc);
+	assert(rasterizer);
+	if (pixel_scale <= 0.f)
+		return false;
+
+	skb__prepare_glyphs_context_t prepare = {
+		.atlas = atlas,
+		.font_collection = layout->params.font_collection,
+		.pixel_scale = pixel_scale,
+		.alpha_mode = alpha_mode,
+		.valid = true,
+	};
+	if (!skb_layout_iterate_render_glyphs(layout, skb__prepare_render_glyph, &prepare) || !prepare.valid)
+		return false;
+
+	// The return value reports whether pixels changed, not whether rasterization
+	// was successful. Reaching this point means the preparation completed.
+	skb_image_atlas_rasterize_missing_items(atlas, temp_alloc, rasterizer);
+	return true;
+}
+
 int32_t skb_layout_get_clusters_count(const skb_layout_t* layout)
 {
 	assert(layout);

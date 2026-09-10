@@ -12,6 +12,7 @@
 #include "skribidi/skb_font_collection.h"
 #include "skribidi/skb_icon_collection.h"
 #include "skribidi/skb_attribute_collection.h"
+#include "skribidi/skb_image_atlas.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -664,6 +665,26 @@ SKB_API const skb_glyph_t* skb_layout_get_glyphs(const skb_layout_t* layout);
  * @return true if all glyphs were visited, false if the callback stopped.
  */
 SKB_API bool skb_layout_iterate_render_glyphs(const skb_layout_t* layout, skb_layout_render_glyph_func_t* callback, void* context);
+
+/**
+ * Requests and rasterizes all glyph images needed by a layout.
+ *
+ * This operation is the mutation boundary between a layout and an image
+ * atlas. It may allocate atlas entries, but on return all subsequent calls to
+ * skb_image_atlas_get_glyph_quad() for the same layout, scale, and mode are
+ * read-only cache lookups until the atlas is compacted or changed otherwise.
+ *
+ * @param layout layout whose text glyphs should be prepared.
+ * @param atlas atlas that owns the CPU pixels.
+ * @param temp_alloc temporary allocator used by rasterization.
+ * @param rasterizer rasterizer used for missing glyphs.
+ * @param pixel_scale pixel density used for atlas cache identity.
+ * @param alpha_mode mask or SDF rasterization mode.
+ * @return true when all glyph requests were accepted and rasterization ran.
+ */
+SKB_API bool skb_layout_prepare_glyphs(
+	const skb_layout_t* layout, skb_image_atlas_t* atlas, skb_temp_alloc_t* temp_alloc,
+	skb_rasterizer_t* rasterizer, float pixel_scale, skb_rasterize_alpha_mode_t alpha_mode);
 
 /** @return number of clusters in the layout. */
 SKB_API int32_t skb_layout_get_clusters_count(const skb_layout_t* layout);
