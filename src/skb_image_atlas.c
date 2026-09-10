@@ -168,6 +168,8 @@ typedef struct skb_image_atlas_t {
 
 	int32_t now_stamp;
 	int32_t last_evicted_stamp;
+	uint64_t glyph_cache_misses;
+	uint64_t glyphs_rasterized;
 
 	skb_image_atlas_config_t config;
 	skb_create_texture_func_t* create_texture_callback;
@@ -398,6 +400,15 @@ uint32_t skb_image_atlas_get_texture_generation(const skb_image_atlas_t* atlas, 
 	assert(texture_idx >= 0 && texture_idx < atlas->textures_count);
 
 	return atlas->textures[texture_idx].generation;
+}
+
+skb_image_atlas_stats_t skb_image_atlas_get_stats(const skb_image_atlas_t* atlas)
+{
+	assert(atlas);
+	return (skb_image_atlas_stats_t) {
+		.glyph_cache_misses = atlas->glyph_cache_misses,
+		.glyphs_rasterized = atlas->glyphs_rasterized,
+	};
 }
 
 skb_rect2i_t skb_image_atlas_get_texture_dirty_bounds(skb_image_atlas_t* atlas, int32_t texture_idx)
@@ -1139,6 +1150,7 @@ skb_quad_t skb_image_atlas_get_glyph_quad(
 		item->texture_idx = (uint8_t)texture_idx;
 		item->hash_id = hash_id;
 		item->lru = skb_list_item_make();
+		atlas->glyph_cache_misses++;
 
 		atlas->has_new_items = true;
 	}
@@ -1650,6 +1662,7 @@ bool skb_image_atlas_rasterize_missing_items(skb_image_atlas_t* atlas, skb_temp_
 							rasterizer, temp_alloc, item->glyph.gid, item->glyph.font, item->glyph.clamped_font_size, alpha_mode,
 							-item->geom_offset_x, -item->geom_offset_y, &target);
 					}
+					atlas->glyphs_rasterized++;
 				} else if (item->type == SKB__ITEM_TYPE_ICON) {
 					// Rasterize icon
 					if (item->flags & SKB__ITEM_IS_COLOR) {

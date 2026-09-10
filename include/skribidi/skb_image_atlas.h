@@ -113,6 +113,14 @@ typedef struct skb_image_atlas_dirty_snapshot_t {
 	const uint8_t* pixels;
 } skb_image_atlas_dirty_snapshot_t;
 
+/** Cumulative CPU glyph-cache and rasterization counters. */
+typedef struct skb_image_atlas_stats_t {
+	/** Number of glyph requests that allocated a new atlas item. */
+	uint64_t glyph_cache_misses;
+	/** Number of glyph items rasterized into atlas pixels. */
+	uint64_t glyphs_rasterized;
+} skb_image_atlas_stats_t;
+
 /**
  * Signature of the image create callback.
  * @param atlas pointer to the image atlas.
@@ -233,6 +241,9 @@ SKB_API skb_image_atlas_texture_format_t skb_image_atlas_get_texture_format(cons
 
 /** Returns the allocation generation of a texture. It changes when the CPU image is resized. */
 SKB_API uint32_t skb_image_atlas_get_texture_generation(const skb_image_atlas_t* atlas, int32_t texture_idx);
+
+/** Returns cumulative glyph cache and rasterization counters. */
+SKB_API skb_image_atlas_stats_t skb_image_atlas_get_stats(const skb_image_atlas_t* atlas);
 
 /**
  * Returns the bounding rect of the modified portion of the specified texture. See skb_image_atlas_get_textures_count() to get number of textures.

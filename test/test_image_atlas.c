@@ -40,6 +40,9 @@ static int test_layout_prepare_dirty_epoch(void)
 		temp_alloc, &params, "Skribidi", -1, SKB_ATTRIBUTE_SET_FROM_STATIC_ARRAY(attributes));
 	ENSURE(layout != NULL);
 	ENSURE(skb_layout_prepare_glyphs(layout, atlas, temp_alloc, rasterizer, 1.f, SKB_RASTERIZE_ALPHA_MASK));
+	const skb_image_atlas_stats_t mask_stats = skb_image_atlas_get_stats(atlas);
+	ENSURE(mask_stats.glyph_cache_misses > 0);
+	ENSURE(mask_stats.glyphs_rasterized > 0);
 
 	bool saw_mask = false;
 	bool tested_newer_epoch = false;
@@ -85,6 +88,9 @@ static int test_layout_prepare_dirty_epoch(void)
 		ENSURE(skb_image_atlas_ack_texture_dirty(atlas, index, snapshot.epoch));
 	}
 	ENSURE(saw_sdf);
+	const skb_image_atlas_stats_t final_stats = skb_image_atlas_get_stats(atlas);
+	ENSURE(final_stats.glyph_cache_misses > mask_stats.glyph_cache_misses);
+	ENSURE(final_stats.glyphs_rasterized > mask_stats.glyphs_rasterized);
 
 	skb_layout_destroy(layout);
 	skb_rasterizer_destroy(rasterizer);
