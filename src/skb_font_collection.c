@@ -353,6 +353,7 @@ void skb_font_collection_set_on_font_fallback(skb_font_collection_t* font_collec
 	assert(font_collection);
 	font_collection->fallback_func = fallback_func;
 	font_collection->fallback_context = context;
+	font_collection->generation = font_collection->generation == UINT64_MAX ? 1 : font_collection->generation + 1;
 }
 
 static bool skb__equals_synthetic_params(hb_font_t* hb_font, const skb_font_create_params_t* params)
