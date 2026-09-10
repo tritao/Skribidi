@@ -42,6 +42,7 @@ static int test_layout_prepare_dirty_epoch(void)
 	ENSURE(skb_layout_prepare_glyphs(layout, atlas, temp_alloc, rasterizer, 1.f, SKB_RASTERIZE_ALPHA_MASK));
 
 	bool saw_mask = false;
+	bool tested_newer_epoch = false;
 	for (int32_t index = 0; index < skb_image_atlas_get_texture_count(atlas); index++) {
 		const skb_image_atlas_dirty_snapshot_t snapshot = skb_image_atlas_peek_texture_dirty(atlas, index);
 		if (!snapshot.epoch)
@@ -52,10 +53,26 @@ static int test_layout_prepare_dirty_epoch(void)
 		ENSURE(snapshot.pixels != NULL);
 		ENSURE(!skb_image_atlas_ack_texture_dirty(atlas, index, snapshot.epoch + 1));
 		ENSURE(skb_image_atlas_peek_texture_dirty(atlas, index).epoch == snapshot.epoch);
-		ENSURE(skb_image_atlas_ack_texture_dirty(atlas, index, snapshot.epoch));
+		if (!tested_newer_epoch) {
+			skb_layout_t* newer_layout = skb_layout_create_utf8(
+				temp_alloc, &params, "Skribidi!", -1, SKB_ATTRIBUTE_SET_FROM_STATIC_ARRAY(attributes));
+			ENSURE(newer_layout != NULL);
+			ENSURE(skb_layout_prepare_glyphs(
+				newer_layout, atlas, temp_alloc, rasterizer, 1.f, SKB_RASTERIZE_ALPHA_MASK));
+			const skb_image_atlas_dirty_snapshot_t newer_snapshot =
+				skb_image_atlas_peek_texture_dirty(atlas, index);
+			ENSURE(newer_snapshot.epoch != snapshot.epoch);
+			ENSURE(!skb_image_atlas_ack_texture_dirty(atlas, index, snapshot.epoch));
+			ENSURE(skb_image_atlas_peek_texture_dirty(atlas, index).epoch == newer_snapshot.epoch);
+			skb_layout_destroy(newer_layout);
+			tested_newer_epoch = true;
+		}
+		const skb_image_atlas_dirty_snapshot_t current = skb_image_atlas_peek_texture_dirty(atlas, index);
+		ENSURE(skb_image_atlas_ack_texture_dirty(atlas, index, current.epoch));
 		ENSURE(skb_image_atlas_peek_texture_dirty(atlas, index).epoch == 0);
 	}
 	ENSURE(saw_mask);
+	ENSURE(tested_newer_epoch);
 
 	ENSURE(skb_layout_prepare_glyphs(layout, atlas, temp_alloc, rasterizer, 1.f, SKB_RASTERIZE_ALPHA_SDF));
 	bool saw_sdf = false;
