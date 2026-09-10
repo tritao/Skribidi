@@ -362,6 +362,55 @@ typedef struct skb_glyph_t {
 	uint16_t gid;
 } skb_glyph_t;
 
+/** Flags copied from the layout run associated with a render glyph. */
+typedef enum skb_layout_render_glyph_flags_t {
+	/** The glyph belongs to a run that starts a source content run. */
+	SKB_LAYOUT_RENDER_GLYPH_HAS_START = SKB_LAYOUT_RUN_HAS_START,
+	/** The glyph belongs to a run that ends a source content run. */
+	SKB_LAYOUT_RENDER_GLYPH_HAS_END = SKB_LAYOUT_RUN_HAS_END,
+	/** The glyph belongs to a list marker run. */
+	SKB_LAYOUT_RENDER_GLYPH_IS_LIST_MARKER = SKB_LAYOUT_RUN_IS_LIST_MARKER,
+	/** The glyph belongs to a list ellipsis run. */
+	SKB_LAYOUT_RENDER_GLYPH_IS_ELLIPSIS = SKB_LAYOUT_RUN_IS_ELLIPSIS,
+	/** The glyph belongs to a run with a baseline shift. */
+	SKB_LAYOUT_RENDER_GLYPH_HAS_BASELINE_SHIFT = SKB_LAYOUT_RUN_HAS_BASELINE_SHIFT,
+} skb_layout_render_glyph_flags_t;
+
+/** Stable render-facing description of one shaped glyph. */
+typedef struct skb_layout_render_glyph_t {
+	/** Font used to shape and rasterize the glyph. */
+	skb_font_handle_t font_handle;
+	/** Glyph identifier in font_handle. */
+	uint32_t glyph_id;
+	/** Glyph position in layout coordinates. */
+	float offset_x;
+	float offset_y;
+	/** Typographic advancement to the next glyph. */
+	float advance_x;
+	/** Font size used for this glyph. */
+	float font_size;
+	/** Logical text range represented by the glyph's shaping cluster. */
+	skb_range_t text_range;
+	/** Text paint resolved from the run attributes. */
+	skb_color_t color;
+	/** Resolved direction and script of the shaping run. */
+	uint8_t direction;
+	uint8_t script;
+	uint8_t bidi_level;
+	/** Flags from skb_layout_render_glyph_flags_t. */
+	uint8_t flags;
+	/** Identifier of the source content run. */
+	intptr_t content_id;
+} skb_layout_render_glyph_t;
+
+/**
+ * Callback used by skb_layout_iterate_render_glyphs().
+ *
+ * The pointed-to value is temporary and only valid for the duration of the
+ * callback. Return false to stop iteration.
+ */
+typedef bool skb_layout_render_glyph_func_t(const skb_layout_render_glyph_t* glyph, void* context);
+
 
 /** Enum describing decoration type. */
 typedef enum {
@@ -601,6 +650,20 @@ SKB_API const skb_layout_run_t* skb_layout_get_layout_runs(const skb_layout_t* l
 SKB_API int32_t skb_layout_get_glyphs_count(const skb_layout_t* layout);
 /** @return const pointer to the glyphs. See skb_layout_get_glyphs_count() to get number of glyphs. */
 SKB_API const skb_glyph_t* skb_layout_get_glyphs(const skb_layout_t* layout);
+
+/**
+ * Iterates shaped text in visual render order without exposing layout storage.
+ *
+ * Only text content is reported. The callback receives a value object rather
+ * than pointers into the layout's line, run, glyph, or cluster arrays, so the
+ * layout representation can change without breaking render adapters.
+ *
+ * @param layout layout to use.
+ * @param callback callback invoked once per renderable shaped glyph.
+ * @param context context passed to callback.
+ * @return true if all glyphs were visited, false if the callback stopped.
+ */
+SKB_API bool skb_layout_iterate_render_glyphs(const skb_layout_t* layout, skb_layout_render_glyph_func_t* callback, void* context);
 
 /** @return number of clusters in the layout. */
 SKB_API int32_t skb_layout_get_clusters_count(const skb_layout_t* layout);

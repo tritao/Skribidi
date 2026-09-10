@@ -3226,6 +3226,55 @@ const skb_glyph_t* skb_layout_get_glyphs(const skb_layout_t* layout)
 	return layout->glyphs;
 }
 
+bool skb_layout_iterate_render_glyphs(const skb_layout_t* layout, skb_layout_render_glyph_func_t* callback, void* context)
+{
+	assert(layout);
+	assert(callback);
+
+	for (int32_t line_idx = 0; line_idx < layout->lines_count; line_idx++) {
+		const skb_layout_line_t* line = &layout->lines[line_idx];
+		for (int32_t run_idx = line->layout_run_range.start; run_idx < line->layout_run_range.end; run_idx++) {
+			const skb_layout_run_t* run = &layout->layout_runs[run_idx];
+			if (run->type != SKB_CONTENT_RUN_UTF8 && run->type != SKB_CONTENT_RUN_UTF32)
+				continue;
+
+			const skb_attribute_set_t attributes = skb__get_run_attributes(layout, run->attributes_range);
+			const skb_attribute_paint_t paint = skb_attributes_get_paint(
+				SKB_PAINT_TEXT, SKB_PAINT_STATE_DEFAULT, attributes, layout->params.attribute_collection);
+
+			for (int32_t glyph_idx = run->glyph_range.start; glyph_idx < run->glyph_range.end; glyph_idx++) {
+				const skb_glyph_t* source = &layout->glyphs[glyph_idx];
+				skb_range_t text_range = {0, 0};
+				if (source->cluster_idx >= 0 && source->cluster_idx < layout->clusters_count) {
+					const skb_cluster_t* cluster = &layout->clusters[source->cluster_idx];
+					text_range.start = cluster->text_offset;
+					text_range.end = cluster->text_offset + cluster->text_count;
+				}
+
+				const skb_layout_render_glyph_t render_glyph = {
+					.font_handle = run->font_handle,
+					.glyph_id = source->gid,
+					.offset_x = source->offset_x,
+					.offset_y = source->offset_y,
+					.advance_x = source->advance_x,
+					.font_size = run->font_size,
+					.text_range = text_range,
+					.color = paint.color,
+					.direction = run->direction,
+					.script = run->script,
+					.bidi_level = run->bidi_level,
+					.flags = run->flags,
+					.content_id = run->content_id,
+				};
+				if (!callback(&render_glyph, context))
+					return false;
+			}
+		}
+	}
+
+	return true;
+}
+
 int32_t skb_layout_get_clusters_count(const skb_layout_t* layout)
 {
 	assert(layout);
