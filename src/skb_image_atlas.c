@@ -143,6 +143,9 @@ typedef struct skb_atlas_texture_t {
 	skb__shelf_packer_t packer;
 	skb_rect2i_t dirty_bounds;
 	skb_rect2i_t prev_dirty_bounds;
+	uint64_t dirty_epoch;
+	uint32_t generation;
+	skb_image_atlas_texture_format_t format;
 	uint8_t index;
 	uintptr_t user_data;
 } skb_atlas_texture_t;
@@ -207,16 +210,32 @@ static void skb__image_destroy(skb_image_t* image)
 	skb_free(image->buffer);
 }
 
-static void skb__atlas_texture_init(skb_atlas_texture_t* texture, uint8_t index, int32_t width, int32_t height, int32_t bpp)
+static uint8_t skb__texture_format_bpp(skb_image_atlas_texture_format_t format)
+{
+	return format == SKB_IMAGE_ATLAS_FORMAT_RGBA8_PREMULTIPLIED ? 4 : 1;
+}
+
+static void skb__atlas_mark_dirty(skb_atlas_texture_t* texture, skb_rect2i_t bounds)
+{
+	if (skb_rect2i_is_empty(bounds))
+		return;
+	texture->dirty_bounds = skb_rect2i_union(texture->dirty_bounds, bounds);
+	texture->dirty_epoch = texture->dirty_epoch == UINT64_MAX ? 1 : texture->dirty_epoch + 1;
+}
+
+static void skb__atlas_texture_init(skb_atlas_texture_t* texture, uint8_t index, int32_t width, int32_t height, skb_image_atlas_texture_format_t format)
 {
 	memset(texture, 0, sizeof(*texture));
 	texture->index = index;
+	texture->format = format;
+	texture->generation = 1;
 
-	skb__image_resize(&texture->image, width, height, bpp);
+	skb__image_resize(&texture->image, width, height, skb__texture_format_bpp(format));
 	skb__shelf_packer_init(&texture->packer, width, height);
 
 	texture->prev_dirty_bounds = (skb_rect2i_t){0};
 	texture->dirty_bounds = (skb_rect2i_t){ 0, 0, width, height };
+	texture->dirty_epoch = 1;
 }
 
 static void skb__atlas_texture_destroy(skb_atlas_texture_t* texture)
@@ -268,9 +287,9 @@ static int32_t skb__round_up(int32_t x, int32_t n)
 	return ((x + n-1) / n) * n;
 }
 
-static skb_atlas_texture_t* skb__add_texture(skb_image_atlas_t* atlas, int32_t desired_width, int32_t desired_height, int32_t bpp)
+static skb_atlas_texture_t* skb__add_texture(skb_image_atlas_t* atlas, int32_t desired_width, int32_t desired_height, skb_image_atlas_texture_format_t format)
 {
-	assert(bpp == 4 || bpp == 1);
+	assert(format <= SKB_IMAGE_ATLAS_FORMAT_RGBA8_PREMULTIPLIED);
 
 	SKB_ARRAY_RESERVE(atlas->textures, atlas->textures_count+1);
 	int32_t texture_idx = atlas->textures_count++;
@@ -280,7 +299,7 @@ static skb_atlas_texture_t* skb__add_texture(skb_image_atlas_t* atlas, int32_t d
 	desired_height = skb_mini(skb_maxi(skb__round_up(desired_height, atlas->config.expand_size), atlas->config.init_height), atlas->config.max_height);
 
 	skb_atlas_texture_t* texture = &atlas->textures[texture_idx];
-	skb__atlas_texture_init(texture, (uint8_t)texture_idx, desired_width, desired_height, bpp);
+	skb__atlas_texture_init(texture, (uint8_t)texture_idx, desired_width, desired_height, format);
 
 	if (atlas->create_texture_callback)
 		atlas->create_texture_callback(atlas, (uint8_t)texture_idx, atlas->create_texture_callback_context);
@@ -365,12 +384,61 @@ const skb_image_t* skb_image_atlas_get_texture(skb_image_atlas_t* atlas, int32_t
 	return &atlas->textures[texture_idx].image;
 }
 
+skb_image_atlas_texture_format_t skb_image_atlas_get_texture_format(const skb_image_atlas_t* atlas, int32_t texture_idx)
+{
+	assert(atlas);
+	assert(texture_idx >= 0 && texture_idx < atlas->textures_count);
+
+	return atlas->textures[texture_idx].format;
+}
+
+uint32_t skb_image_atlas_get_texture_generation(const skb_image_atlas_t* atlas, int32_t texture_idx)
+{
+	assert(atlas);
+	assert(texture_idx >= 0 && texture_idx < atlas->textures_count);
+
+	return atlas->textures[texture_idx].generation;
+}
+
 skb_rect2i_t skb_image_atlas_get_texture_dirty_bounds(skb_image_atlas_t* atlas, int32_t texture_idx)
 {
 	assert(atlas);
 	assert(texture_idx >= 0 && texture_idx < atlas->textures_count);
 
 	return atlas->textures[texture_idx].dirty_bounds;
+}
+
+skb_image_atlas_dirty_snapshot_t skb_image_atlas_peek_texture_dirty(const skb_image_atlas_t* atlas, int32_t texture_idx)
+{
+	assert(atlas);
+	assert(texture_idx >= 0 && texture_idx < atlas->textures_count);
+
+	const skb_atlas_texture_t* texture = &atlas->textures[texture_idx];
+	const bool dirty = !skb_rect2i_is_empty(texture->dirty_bounds);
+	return (skb_image_atlas_dirty_snapshot_t) {
+		.epoch = dirty ? texture->dirty_epoch : 0,
+		.texture_generation = texture->generation,
+		.format = texture->format,
+		.dirty = texture->dirty_bounds,
+		.width = texture->image.width,
+		.height = texture->image.height,
+		.stride_bytes = texture->image.stride_bytes,
+		.pixels = texture->image.buffer,
+	};
+}
+
+bool skb_image_atlas_ack_texture_dirty(skb_image_atlas_t* atlas, int32_t texture_idx, uint64_t epoch)
+{
+	assert(atlas);
+	assert(texture_idx >= 0 && texture_idx < atlas->textures_count);
+
+	skb_atlas_texture_t* texture = &atlas->textures[texture_idx];
+	if (!epoch || skb_rect2i_is_empty(texture->dirty_bounds) || texture->dirty_epoch != epoch)
+		return false;
+
+	texture->prev_dirty_bounds = texture->dirty_bounds;
+	texture->dirty_bounds = skb_rect2i_make_undefined();
+	return true;
 }
 
 skb_rect2i_t skb_image_atlas_get_and_reset_texture_dirty_bounds(skb_image_atlas_t* atlas, int32_t texture_idx)
@@ -909,12 +977,12 @@ static void skb__shelf_packer_expand(skb__shelf_packer_t* packer, int32_t new_wi
 
 static bool skb__try_evict_items(skb_image_atlas_t* atlas, int32_t evict_after_duration); // fwd
 
-static int32_t skb__add_rect(skb_image_atlas_t* atlas, int32_t requested_width, int32_t requested_height, const uint8_t requested_bpp, int32_t* offset_x, int32_t* offset_y, skb__shelf_packer_handle_t* handle)
+static int32_t skb__add_rect(skb_image_atlas_t* atlas, int32_t requested_width, int32_t requested_height, skb_image_atlas_texture_format_t requested_format, int32_t* offset_x, int32_t* offset_y, skb__shelf_packer_handle_t* handle)
 {
 	// Try to add to existing images first.
 	for (int32_t i = atlas->textures_count - 1; i >= 0; i--) {
 		skb_atlas_texture_t* texture = &atlas->textures[i];
-		if (texture->image.bpp == requested_bpp) {
+		if (texture->format == requested_format) {
 			if (skb__shelf_packer_alloc_rect(&texture->packer, requested_width, requested_height, offset_x, offset_y, handle, &atlas->config))
 				return texture->index;
 		}
@@ -922,7 +990,7 @@ static int32_t skb__add_rect(skb_image_atlas_t* atlas, int32_t requested_width, 
 	return SKB_INVALID_INDEX;
 }
 
-static int32_t skb__add_rect_or_grow(skb_image_atlas_t* atlas, int32_t requested_width, int32_t requested_height, const uint8_t requested_bpp, int32_t* offset_x, int32_t* offset_y, skb__shelf_packer_handle_t* handle)
+static int32_t skb__add_rect_or_grow(skb_image_atlas_t* atlas, int32_t requested_width, int32_t requested_height, skb_image_atlas_texture_format_t requested_format, int32_t* offset_x, int32_t* offset_y, skb__shelf_packer_handle_t* handle)
 {
 	assert(atlas);
 
@@ -933,14 +1001,14 @@ static int32_t skb__add_rect_or_grow(skb_image_atlas_t* atlas, int32_t requested
 	int32_t texture_idx = SKB_INVALID_INDEX;
 
 	// Try to add to existing images first.
-	texture_idx = skb__add_rect(atlas, requested_width, requested_height, requested_bpp, offset_x, offset_y, handle);
+	texture_idx = skb__add_rect(atlas, requested_width, requested_height, requested_format, offset_x, offset_y, handle);
 	if (texture_idx != SKB_INVALID_INDEX)
 		return texture_idx;
 
 	// Could not fit into any existing images, try to aggressively evict unused glyphs, and try again.
 	static int32_t urgent_evict_after_duration = 0;
 	if (skb__try_evict_items(atlas, urgent_evict_after_duration)) {
-		texture_idx = skb__add_rect(atlas, requested_width, requested_height, requested_bpp, offset_x, offset_y, handle);
+		texture_idx = skb__add_rect(atlas, requested_width, requested_height, requested_format, offset_x, offset_y, handle);
 		if (texture_idx != SKB_INVALID_INDEX)
 			return texture_idx;
 	}
@@ -948,7 +1016,7 @@ static int32_t skb__add_rect_or_grow(skb_image_atlas_t* atlas, int32_t requested
 	// Could not find free space, try to expand the last atlas of matching bpp.
 	skb_atlas_texture_t* last_texture = NULL;
 	for (int32_t i = atlas->textures_count - 1; i >= 0; i--) {
-		if (atlas->textures[i].image.bpp == requested_bpp) {
+		if (atlas->textures[i].format == requested_format) {
 			last_texture = &atlas->textures[i];
 			break;
 		}
@@ -980,7 +1048,7 @@ static int32_t skb__add_rect_or_grow(skb_image_atlas_t* atlas, int32_t requested
 	}
 
 	// Could not expand the last image, create a new one.
-	skb_atlas_texture_t* new_texture = skb__add_texture(atlas, requested_width, requested_height, requested_bpp);
+	skb_atlas_texture_t* new_texture = skb__add_texture(atlas, requested_width, requested_height, requested_format);
 
 	if (skb__shelf_packer_alloc_rect(&new_texture->packer, requested_width, requested_height, offset_x, offset_y, handle, &atlas->config))
 		return new_texture->index;
@@ -1035,9 +1103,11 @@ skb_quad_t skb_image_atlas_get_glyph_quad(
 
 		hb_face_t* face = hb_font_get_face(font->hb_font);
 		const bool is_color = hb_ot_color_glyph_has_paint(face, glyph_id);
-		const uint8_t requested_bpp = is_color ? 4 : 1;
+		const skb_image_atlas_texture_format_t requested_format = is_color
+			? SKB_IMAGE_ATLAS_FORMAT_RGBA8_PREMULTIPLIED
+			: (alpha_mode == SKB_RASTERIZE_ALPHA_SDF ? SKB_IMAGE_ATLAS_FORMAT_R8_SDF : SKB_IMAGE_ATLAS_FORMAT_R8_MASK);
 
-		const int32_t texture_idx = skb__add_rect_or_grow(atlas, bounds.width, bounds.height, requested_bpp, &texture_offset_x, &texture_offset_y, &packer_handle);
+		const int32_t texture_idx = skb__add_rect_or_grow(atlas, bounds.width, bounds.height, requested_format, &texture_offset_x, &texture_offset_y, &packer_handle);
 		if (texture_idx == SKB_INVALID_INDEX)
 			return (skb_quad_t){0};
 
@@ -1118,6 +1188,7 @@ skb_quad_t skb_image_atlas_get_glyph_quad(
 
 	quad.scale = render_scale * pixel_scale;
 	quad.texture_idx = item->texture_idx;
+	quad.texture_generation = atlas->textures[item->texture_idx].generation;
 	SKB_SET_FLAG(quad.flags, SKB_QUAD_IS_COLOR, item->flags & SKB__ITEM_IS_COLOR);
 	SKB_SET_FLAG(quad.flags, SKB_QUAD_IS_SDF, item->flags & SKB__ITEM_IS_SDF);
 	quad.color = (item->flags & SKB__ITEM_IS_COLOR) ? skb_rgba(255,255,255, tint_color.a) : tint_color;
@@ -1186,9 +1257,11 @@ skb_quad_t skb_image_atlas_get_icon_quad(
 		int32_t atlas_offset_y = 0;
 		skb__shelf_packer_handle_t atlas_handle = {0};
 
-		const uint8_t requested_bpp = icon->is_color ? 4 : 1;
+		const skb_image_atlas_texture_format_t requested_format = icon->is_color
+			? SKB_IMAGE_ATLAS_FORMAT_RGBA8_PREMULTIPLIED
+			: (alpha_mode == SKB_RASTERIZE_ALPHA_SDF ? SKB_IMAGE_ATLAS_FORMAT_R8_SDF : SKB_IMAGE_ATLAS_FORMAT_R8_MASK);
 
-		const int32_t image_idx = skb__add_rect_or_grow(atlas, bounds.width, bounds.height, requested_bpp, &texture_offset_x, &atlas_offset_y, &atlas_handle);
+		const int32_t image_idx = skb__add_rect_or_grow(atlas, bounds.width, bounds.height, requested_format, &texture_offset_x, &atlas_offset_y, &atlas_handle);
 		if (image_idx == SKB_INVALID_INDEX)
 			return (skb_quad_t){0};
 
@@ -1270,6 +1343,7 @@ skb_quad_t skb_image_atlas_get_icon_quad(
 
 	quad.scale = skb_maxf(render_scale_x, render_scale_y) * pixel_scale;
 	quad.texture_idx = item->texture_idx;
+	quad.texture_generation = atlas->textures[item->texture_idx].generation;
 	SKB_SET_FLAG(quad.flags, SKB_QUAD_IS_COLOR, item->flags & SKB__ITEM_IS_COLOR);
 	SKB_SET_FLAG(quad.flags, SKB_QUAD_IS_SDF, item->flags & SKB__ITEM_IS_SDF);
 	quad.color = (item->flags & SKB__ITEM_IS_COLOR) ? skb_rgba(255,255,255, tint_color.a) : tint_color;
@@ -1326,9 +1400,10 @@ skb_quad_t skb_image_atlas_get_decoration_quad(
 		int32_t atlas_offset_y = 0;
 		skb__shelf_packer_handle_t atlas_handle = {0};
 
-		const uint8_t requested_bpp = 1;
+		const skb_image_atlas_texture_format_t requested_format =
+			alpha_mode == SKB_RASTERIZE_ALPHA_SDF ? SKB_IMAGE_ATLAS_FORMAT_R8_SDF : SKB_IMAGE_ATLAS_FORMAT_R8_MASK;
 
-		const int32_t texture_idx = skb__add_rect_or_grow(atlas, bounds.width, bounds.height, requested_bpp, &atlas_offset_x, &atlas_offset_y, &atlas_handle);
+		const int32_t texture_idx = skb__add_rect_or_grow(atlas, bounds.width, bounds.height, requested_format, &atlas_offset_x, &atlas_offset_y, &atlas_handle);
 		if (texture_idx == SKB_INVALID_INDEX)
 			return (skb_quad_t){0};
 
@@ -1415,6 +1490,7 @@ skb_quad_t skb_image_atlas_get_decoration_quad(
 
 	quad.scale = render_scale * pixel_scale;
 	quad.texture_idx = item->texture_idx;
+	quad.texture_generation = atlas->textures[item->texture_idx].generation;
 	quad.flags |= SKB_QUAD_IS_COLOR;
 	SKB_SET_FLAG(quad.flags, SKB_QUAD_IS_SDF, item->flags & SKB__ITEM_IS_SDF);
 	quad.color = (item->flags & SKB__ITEM_IS_COLOR) ? skb_rgba(255,255,255, tint_color.a) : tint_color;
@@ -1470,7 +1546,7 @@ static bool skb__try_evict_items(skb_image_atlas_t* atlas, int32_t evict_after_d
 					.width = item->width,
 					.height = item->height,
 				};
-				texture->dirty_bounds = skb_rect2i_union(texture->dirty_bounds, dirty);
+				skb__atlas_mark_dirty(texture, dirty);
 				skb__image_clear(&texture->image, item->texture_offset_x, item->texture_offset_y, item->width, item->height);
 			}
 
@@ -1529,7 +1605,8 @@ bool skb_image_atlas_rasterize_missing_items(skb_image_atlas_t* atlas, skb_temp_
 		if (texture->image.width != texture->packer.width || texture->image.height != texture->packer.height) {
 			// Dirty the whole old texture.
 			skb_rect2i_t dirty = { .x = 0, .y = 0, .width = texture->packer.width, .height = texture->packer.height, };
-			texture->dirty_bounds = skb_rect2i_union(texture->dirty_bounds, dirty);
+			skb__atlas_mark_dirty(texture, dirty);
+			texture->generation = texture->generation == UINT32_MAX ? 1 : texture->generation + 1;
 			skb__image_resize(&texture->image, texture->packer.width, texture->packer.height, texture->image.bpp);
 		}
 
@@ -1584,7 +1661,7 @@ bool skb_image_atlas_rasterize_missing_items(skb_image_atlas_t* atlas, skb_temp_
 					skb_rasterizer_draw_decoration_pattern( rasterizer, temp_alloc, item->pattern.style, item->pattern.thickness, alpha_mode, -item->geom_offset_x, -item->geom_offset_y, &target);
 				}
 
-				texture->dirty_bounds = skb_rect2i_union(texture->dirty_bounds, atlas_bounds);
+				skb__atlas_mark_dirty(texture, atlas_bounds);
 
 				item->state = SKB__ITEM_STATE_RASTERIZED;
 

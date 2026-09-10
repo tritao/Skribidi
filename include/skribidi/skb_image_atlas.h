@@ -64,6 +64,16 @@ enum skb_quad_flags_t {
 	SKB_QUAD_IS_EMPTY   = 1 << 2,
 };
 
+/** Semantic format of an atlas texture. */
+typedef enum skb_image_atlas_texture_format_t {
+	/** Single-channel coverage mask. */
+	SKB_IMAGE_ATLAS_FORMAT_R8_MASK = 0,
+	/** Single-channel signed-distance field. */
+	SKB_IMAGE_ATLAS_FORMAT_R8_SDF,
+	/** Premultiplied sRGB color with alpha. */
+	SKB_IMAGE_ATLAS_FORMAT_RGBA8_PREMULTIPLIED,
+} skb_image_atlas_texture_format_t;
+
 /** Quad representing textured rectangle to render. */
 typedef struct skb_quad_t {
 	/** Screen geometry of the quad to render */
@@ -79,9 +89,29 @@ typedef struct skb_quad_t {
 	skb_color_t color;
 	/** Index of the atlas texture to draw. */
 	uint8_t texture_idx;
+	/** Generation of the atlas texture referenced by texture_idx. */
+	uint32_t texture_generation;
 	/** Render quad flags (see skb_quad_flags_t). */
 	uint8_t flags;
 } skb_quad_t;
+
+/** Stable snapshot of one atlas texture's pending CPU upload. */
+typedef struct skb_image_atlas_dirty_snapshot_t {
+	/** Dirty-state epoch captured by this snapshot. Zero means no dirty region. */
+	uint64_t epoch;
+	/** Generation of the CPU texture allocation. */
+	uint32_t texture_generation;
+	/** Semantic pixel format of the texture. */
+	skb_image_atlas_texture_format_t format;
+	/** Modified origin and extent in texture pixels. */
+	skb_rect2i_t dirty;
+	/** Current texture dimensions and row pitch. */
+	int32_t width;
+	int32_t height;
+	int32_t stride_bytes;
+	/** Pointer to the CPU atlas pixels; valid until the atlas changes. */
+	const uint8_t* pixels;
+} skb_image_atlas_dirty_snapshot_t;
 
 /**
  * Signature of the image create callback.
@@ -198,6 +228,12 @@ SKB_API int32_t skb_image_atlas_get_texture_count(skb_image_atlas_t* atlas);
  */
 SKB_API const skb_image_t* skb_image_atlas_get_texture(skb_image_atlas_t* atlas, int32_t texture_idx);
 
+/** Returns the semantic format of a texture. */
+SKB_API skb_image_atlas_texture_format_t skb_image_atlas_get_texture_format(const skb_image_atlas_t* atlas, int32_t texture_idx);
+
+/** Returns the allocation generation of a texture. It changes when the CPU image is resized. */
+SKB_API uint32_t skb_image_atlas_get_texture_generation(const skb_image_atlas_t* atlas, int32_t texture_idx);
+
 /**
  * Returns the bounding rect of the modified portion of the specified texture. See skb_image_atlas_get_textures_count() to get number of textures.
  * @param atlas atlas to use.
@@ -205,6 +241,18 @@ SKB_API const skb_image_t* skb_image_atlas_get_texture(skb_image_atlas_t* atlas,
  * @return bounding rect of the modified portion of the image.
  */
 SKB_API skb_rect2i_t skb_image_atlas_get_texture_dirty_bounds(skb_image_atlas_t* atlas, int32_t texture_idx);
+
+/**
+ * Peeks a non-destructive dirty snapshot.
+ *
+ * The snapshot remains pending until acknowledged with the same epoch. If the
+ * atlas changes after the snapshot, a later epoch is retained and acknowledging
+ * the old snapshot cannot discard it.
+ */
+SKB_API skb_image_atlas_dirty_snapshot_t skb_image_atlas_peek_texture_dirty(const skb_image_atlas_t* atlas, int32_t texture_idx);
+
+/** Acknowledges exactly one previously peeked dirty epoch. */
+SKB_API bool skb_image_atlas_ack_texture_dirty(skb_image_atlas_t* atlas, int32_t texture_idx, uint64_t epoch);
 
 /**
  * Returns the bounding rect of the modified portion of the specified texture, and resets the bounding rectangle.
