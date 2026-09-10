@@ -2778,6 +2778,7 @@ skb_layout_t* skb_layout_create(const skb_layout_params_t* params)
 	}
 
 	layout->should_free_instance = true;
+	layout->generation = 1;
 
 	return layout;
 }
@@ -2840,6 +2841,7 @@ void skb_layout_reset(skb_layout_t* layout)
 	layout->lines_count = 0;
 	layout->layout_runs_count = 0;
 	layout->decorations_count = 0;
+	layout->generation = layout->generation == UINT64_MAX ? 1 : layout->generation + 1;
 }
 
 
@@ -3182,6 +3184,12 @@ const skb_layout_params_t* skb_layout_get_params(const skb_layout_t* layout)
 {
 	assert(layout);
 	return &layout->params;
+}
+
+uint64_t skb_layout_get_generation(const skb_layout_t* layout)
+{
+	assert(layout);
+	return layout->generation;
 }
 
 int32_t skb_layout_get_text_count(const skb_layout_t* layout)

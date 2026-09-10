@@ -320,6 +320,8 @@ static skb_font_t* skb__font_create(skb_font_collection_t* font_collection, hb_f
 		}
 	}
 
+	font_collection->generation = font_collection->generation == UINT64_MAX ? 1 : font_collection->generation + 1;
+
 	return font;
 }
 
@@ -331,6 +333,7 @@ skb_font_collection_t* skb_font_collection_create(void)
 	memset(result, 0, sizeof(skb_font_collection_t));
 
 	result->id = ++id;
+	result->generation = 1;
 	result->fonts_free_list = SKB_INVALID_INDEX;
 
 	return result;
@@ -482,6 +485,7 @@ bool skb_font_collection_remove_font(skb_font_collection_t* font_collection, skb
 		return false;
 
 	skb__font_destroy(font_collection, font);
+	font_collection->generation = font_collection->generation == UINT64_MAX ? 1 : font_collection->generation + 1;
 
 	return true;
 }
@@ -807,6 +811,12 @@ uint32_t skb_font_collection_get_id(const skb_font_collection_t* font_collection
 {
 	assert(font_collection);
 	return font_collection->id;
+}
+
+uint64_t skb_font_collection_get_generation(const skb_font_collection_t* font_collection)
+{
+	assert(font_collection);
+	return font_collection->generation;
 }
 
 skb_rect2_t skb_font_get_glyph_bounds(const skb_font_collection_t* font_collection, const skb_font_handle_t font_handle, uint32_t glyph_id, float font_size)

@@ -382,6 +382,9 @@ SKB_API skb_font_t* skb_font_collection_get_font(const skb_font_collection_t* fo
 /** @returns the id of the font collection, each font collection has unique index. */
 SKB_API uint32_t skb_font_collection_get_id(const skb_font_collection_t* font_collection);
 
+/** @returns the mutable generation of the font collection. */
+SKB_API uint64_t skb_font_collection_get_generation(const skb_font_collection_t* font_collection);
+
 /**
  * Returns the bounding rect of the specified glyph.
  * @param font_collection font collection to use.

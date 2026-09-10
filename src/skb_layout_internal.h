@@ -37,6 +37,7 @@ typedef struct skb__shaping_run_t {
 
 typedef struct skb_layout_t {
 	skb_layout_params_t params;	// Note: params has 'base_attributes' slice which points to attributes in the 'attributes' array.
+	uint64_t generation;		// Changes whenever the layout content or parameters are rebuilt.
 
 	skb_rect2_t bounds;
 	skb_padding2_t padding;

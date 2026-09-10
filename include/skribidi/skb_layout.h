@@ -635,6 +635,9 @@ SKB_API void skb_layout_destroy(skb_layout_t* layout);
  */
 SKB_API const skb_layout_params_t* skb_layout_get_params(const skb_layout_t* layout);
 
+/** @returns the generation of the current layout content and parameters. */
+SKB_API uint64_t skb_layout_get_generation(const skb_layout_t* layout);
+
 /** @return number of codepoints in the layout text. */
 SKB_API int32_t skb_layout_get_text_count(const skb_layout_t* layout);
 /** @return const pointer to the codepoints of the text. See skb_layout_get_text_count() to get text length. */
