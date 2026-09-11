@@ -76,6 +76,14 @@ static bool stop_after_one_render_glyph(const skb_layout_render_glyph_t* glyph, 
 	return false;
 }
 
+static bool count_render_glyphs(const skb_layout_render_glyph_t* glyph, void* context)
+{
+	(void)glyph;
+	int32_t* count = (int32_t*)context;
+	(*count)++;
+	return true;
+}
+
 static int test_render_glyph_iterator(void)
 {
 	skb_temp_alloc_t* temp_alloc = skb_temp_alloc_create(1024);
@@ -109,6 +117,42 @@ static int test_render_glyph_iterator(void)
 	int32_t stopped_count = 0;
 	ENSURE(!skb_layout_iterate_render_glyphs(layout, stop_after_one_render_glyph, &stopped_count));
 	ENSURE(stopped_count == 1);
+
+	skb_layout_destroy(layout);
+	skb_font_collection_destroy(font_collection);
+	skb_temp_alloc_destroy(temp_alloc);
+	return 0;
+}
+
+static int test_mixed_rtl_glyph_range(void)
+{
+	skb_temp_alloc_t* temp_alloc = skb_temp_alloc_create(1024);
+	skb_font_collection_t* font_collection = skb_font_collection_create();
+	ENSURE(temp_alloc != NULL);
+	ENSURE(font_collection != NULL);
+	skb_font_handle_t font_handle = skb_font_collection_add_font(
+		font_collection, "data/IBMPlexSansArabic-Regular.ttf", SKB_FONT_FAMILY_DEFAULT, NULL);
+	ENSURE(font_handle != 0);
+
+	skb_attribute_t attributes[] = {
+		skb_attribute_make_font_size(15.f),
+	};
+	skb_layout_params_t layout_params = {
+		.font_collection = font_collection,
+		.layout_width = 300.f,
+	};
+	skb_layout_t* layout = skb_layout_create_utf8(
+		temp_alloc, &layout_params, "مرحبا שלום", -1,
+		SKB_ATTRIBUTE_SET_FROM_STATIC_ARRAY(attributes));
+	ENSURE(layout != NULL);
+
+	// The glyph array is visual order while clusters are logical order. A
+	// mixed RTL line must still expose every shaped glyph to render iteration,
+	// including missing-glyph placeholders from the deliberately Arabic-only
+	// test font.
+	int32_t rendered_glyph_count = 0;
+	ENSURE(skb_layout_iterate_render_glyphs(layout, count_render_glyphs, &rendered_glyph_count));
+	ENSURE(rendered_glyph_count == skb_layout_get_glyphs_count(layout));
 
 	skb_layout_destroy(layout);
 	skb_font_collection_destroy(font_collection);
@@ -196,6 +240,7 @@ int layout_tests(void)
 	RUN_SUBTEST(test_init);
 	RUN_SUBTEST(test_missing_script);
 	RUN_SUBTEST(test_render_glyph_iterator);
+	RUN_SUBTEST(test_mixed_rtl_glyph_range);
 	RUN_SUBTEST(test_caret_pos);
 	return 0;
 }

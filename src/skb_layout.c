@@ -961,16 +961,21 @@ static skb_layout_line_t* skb__add_line(skb_layout_t* layout)
 static void skb__update_glyph_range(const skb_layout_t* layout, skb_layout_run_t* layout_run)
 {
 	if (layout_run->cluster_range.start != layout_run->cluster_range.end) {
-		const skb_cluster_t* first_cluster = &layout->clusters[layout_run->cluster_range.start];
-		const skb_cluster_t* last_cluster = &layout->clusters[layout_run->cluster_range.end - 1];
-
-		if (first_cluster->glyphs_offset <= last_cluster->glyphs_offset) {
-			layout_run->glyph_range.start = first_cluster->glyphs_offset;
-			layout_run->glyph_range.end = last_cluster->glyphs_offset + last_cluster->glyphs_count;
-		} else {
-			layout_run->glyph_range.start = last_cluster->glyphs_offset;
-			layout_run->glyph_range.end = first_cluster->glyphs_offset + first_cluster->glyphs_count;
+		// Clusters are kept in logical order while glyphs are kept in visual
+		// order. For right-to-left text, the first and last logical clusters
+		// can therefore be surrounded by glyphs from the clusters in between
+		// (this happens when adjacent scripts share a font). Calculate the
+		// complete range instead of assuming the endpoints describe it.
+		int32_t glyph_start = INT32_MAX;
+		int32_t glyph_end = 0;
+		for (int32_t i = layout_run->cluster_range.start;
+			i < layout_run->cluster_range.end; ++i) {
+			const skb_cluster_t* cluster = &layout->clusters[i];
+			glyph_start = skb_mini(glyph_start, cluster->glyphs_offset);
+			glyph_end = skb_maxi(glyph_end, cluster->glyphs_offset + cluster->glyphs_count);
 		}
+		layout_run->glyph_range.start = glyph_start;
+		layout_run->glyph_range.end = glyph_end;
 	}
 }
 
