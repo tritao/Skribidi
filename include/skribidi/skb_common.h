@@ -18,7 +18,7 @@ extern "C" {
 * Helper macro to work around syntax differences in C vs C++
 * when instantiating structs.
 */
-#if defined(__cplusplus__)
+#if defined(__cplusplus)
 	#define SKB_LITERAL(type) type
 #else
 	#define SKB_LITERAL(type) (type)
