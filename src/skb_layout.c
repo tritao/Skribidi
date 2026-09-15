@@ -13,7 +13,9 @@
 #include "graphemebreak.h"
 #include "linebreak.h"
 #include "wordbreak.h"
+#ifndef SKB_DISABLE_BUDOUX
 #include "budoux.h"
+#endif
 
 #include "skribidi/skb_common.h"
 #include "skribidi/skb_layout.h"
@@ -2550,6 +2552,7 @@ bool skb_layout_add_ellipsis_to_last_line(skb_layout_t* layout)
 // Layout
 //
 
+#ifndef SKB_DISABLE_BUDOUX
 static void skb__override_line_breaks(skb_layout_t* layout, int32_t start_offset, int32_t end_offset, boundary_iterator_t iter)
 {
 	// Override line breaks.
@@ -2570,10 +2573,15 @@ static void skb__override_line_breaks(skb_layout_t* layout, int32_t start_offset
 		layout->text_props[offset].flags |= SKB_TEXT_PROP_ALLOW_LINE_BREAK;
 	}
 }
+#endif
 
 
 static void skb__apply_lang_based_word_breaks(const skb__layout_build_context_t* build_context, skb_layout_t* layout)
 {
+#ifdef SKB_DISABLE_BUDOUX
+	(void)build_context;
+	(void)layout;
+#else
 	// Language based word breaks. These are applied only to specific sections of script.
 	const hb_language_t lang_ja = hb_language_from_string("ja", 2);
 	const hb_language_t lang_zh_hant = hb_language_from_string("zh-hant", 7);
@@ -2612,6 +2620,7 @@ static void skb__apply_lang_based_word_breaks(const skb__layout_build_context_t*
 			skb__override_line_breaks(layout, start, end, iter);
 		}
 	}
+#endif
 }
 
 
