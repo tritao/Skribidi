@@ -382,6 +382,48 @@ static int test_option_word_navigation_macos(void)
 	return 0;
 }
 
+static int test_word_start_at_document_start(void)
+{
+	skb_temp_alloc_t* temp_alloc = skb_temp_alloc_create(1024);
+	ENSURE(temp_alloc != NULL);
+
+	skb_font_collection_t* font_collection = skb_font_collection_create();
+	ENSURE(font_collection != NULL);
+	skb_font_handle_t font_handle = skb_font_collection_add_font(font_collection, "data/IBMPlexSans-Regular.ttf", SKB_FONT_FAMILY_DEFAULT, NULL);
+	ENSURE(font_handle);
+
+	skb_attribute_t attributes[] = {
+		skb_attribute_make_font_size(15.f),
+	};
+	skb_editor_params_t params = {
+		.font_collection = font_collection,
+		.caret_mode = SKB_CARET_MODE_SKRIBIDI,
+		.paragraph_attributes = SKB_ATTRIBUTE_SET_FROM_STATIC_ARRAY(attributes),
+	};
+
+	skb_editor_t* editor = skb_editor_create(&params);
+	ENSURE(editor != NULL);
+
+	const char* text = "Hello world";
+	skb_editor_set_text_utf8(editor, temp_alloc, text, (int32_t)strlen(text));
+
+	skb_caret_info_t caret_info = skb_editor_get_caret_info_at(editor, SKB_CURRENT_SELECTION_END);
+	skb_text_position_t hit_position = skb_editor_hit_test(editor, SKB_MOVEMENT_CARET, caret_info.x, caret_info.y);
+	ENSURE(hit_position.offset == 0);
+
+	// A double click at the first caret invokes the editor word-start path.
+	skb_editor_process_mouse_click(editor, caret_info.x, caret_info.y, 0, 1.0);
+	skb_editor_process_mouse_click(editor, caret_info.x, caret_info.y, 0, 1.1);
+	skb_text_range_t selection = skb_editor_get_current_selection(editor);
+	ENSURE(selection.start.offset == 0);
+
+	skb_editor_destroy(editor);
+	skb_font_collection_destroy(font_collection);
+	skb_temp_alloc_destroy(temp_alloc);
+
+	return 0;
+}
+
 int editor_tests(void)
 {
 	RUN_SUBTEST(test_init);
@@ -389,5 +431,6 @@ int editor_tests(void)
 	RUN_SUBTEST(test_command_document_navigation_macos);
 	RUN_SUBTEST(test_shift_command_text_selection_macos);
 	RUN_SUBTEST(test_option_word_navigation_macos);
+	RUN_SUBTEST(test_word_start_at_document_start);
 	return 0;
 }

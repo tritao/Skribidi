@@ -1020,7 +1020,7 @@ skb_text_position_t skb_editor_get_word_start_at(const skb_editor_t* editor, skb
 	const skb_text_property_t* text_props = skb_layout_get_text_properties(skb__get_layout(editor, paragraph_pos.paragraph_idx));
 
 	if (text_props) {
-		while (offset >= 0) {
+		while (offset > 0) {
 			if (text_props[offset-1].flags & SKB_TEXT_PROP_WORD_BREAK) {
 				offset = skb_layout_align_grapheme_offset(skb__get_layout(editor, paragraph_pos.paragraph_idx), offset);
 				break;

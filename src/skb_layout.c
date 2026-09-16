@@ -3885,7 +3885,7 @@ skb_text_position_t skb_layout_get_word_start_at(const skb_layout_t* layout, skb
 	// Not using insert position here, since we want to start from the "character" the user has hit.
 	int32_t offset = pos.offset;
 
-	while (offset >= 0) {
+	while (offset > 0) {
 		if (layout->text_props[offset-1].flags & SKB_TEXT_PROP_WORD_BREAK) {
 			offset = skb_layout_align_grapheme_offset(layout, offset);
 			break;

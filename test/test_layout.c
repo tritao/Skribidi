@@ -124,10 +124,47 @@ static int test_caret_pos(void)
 	return 0;
 }
 
+static int test_word_start_at_document_start(void)
+{
+	skb_temp_alloc_t* temp_alloc = skb_temp_alloc_create(1024);
+	ENSURE(temp_alloc != NULL);
+
+	skb_font_collection_t* font_collection = skb_font_collection_create();
+	ENSURE(font_collection != NULL);
+	skb_font_handle_t font_handle = skb_font_collection_add_font(font_collection, "data/IBMPlexSans-Regular.ttf", SKB_FONT_FAMILY_DEFAULT, NULL);
+	ENSURE(font_handle);
+
+	skb_attribute_t attributes[] = {
+		skb_attribute_make_font_size(15.f),
+	};
+	skb_layout_params_t layout_params = {
+		.font_collection = font_collection,
+		.layout_width = 200.f,
+		.layout_height = 100.f,
+		.layout_attributes = SKB_ATTRIBUTE_SET_FROM_STATIC_ARRAY(attributes),
+	};
+
+	skb_layout_t* layout = skb_layout_create_utf8(temp_alloc, &layout_params, "Hello world", -1, (skb_attribute_set_t){0});
+	ENSURE(layout != NULL);
+
+	skb_text_position_t word_start = skb_layout_get_word_start_at(layout, (skb_text_position_t){
+		.offset = 0,
+		.affinity = SKB_AFFINITY_SOL,
+	});
+	ENSURE(word_start.offset == 0);
+
+	skb_layout_destroy(layout);
+	skb_font_collection_destroy(font_collection);
+	skb_temp_alloc_destroy(temp_alloc);
+
+	return 0;
+}
+
 int layout_tests(void)
 {
 	RUN_SUBTEST(test_init);
 	RUN_SUBTEST(test_missing_script);
 	RUN_SUBTEST(test_caret_pos);
+	RUN_SUBTEST(test_word_start_at_document_start);
 	return 0;
 }
