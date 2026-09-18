@@ -656,6 +656,78 @@ static int test_edit_transaction(void)
 	return 0;
 }
 
+static int test_document_offset_mappings(void)
+{
+	skb_temp_alloc_t* temp_alloc = skb_temp_alloc_create(1024);
+	ENSURE(temp_alloc != NULL);
+	skb_font_collection_t* font_collection = skb_font_collection_create();
+	ENSURE(font_collection != NULL);
+	skb_font_handle_t font_handle = skb_font_collection_add_font(font_collection, "data/IBMPlexSans-Regular.ttf", SKB_FONT_FAMILY_DEFAULT, NULL);
+	ENSURE(font_handle);
+
+	skb_editor_params_t params = {
+		.font_collection = font_collection,
+		.caret_mode = SKB_CARET_MODE_SKRIBIDI,
+	};
+	skb_editor_t* editor = skb_editor_create(&params);
+	ENSURE(editor != NULL);
+
+	const char* text = "A\xC3\xA9" "e\xCC\x81" "\xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x91\xA7\xE2\x80\x8D\xF0\x9F\x91\xA6" "\n" "\xE6\x97\xA5\xE6\x9C\xAC";
+	skb_editor_set_text_utf8(editor, temp_alloc, text, -1);
+
+	// A, é, e, combining acute, four emoji, three ZWJs, LF, 日本.
+	const int32_t codepoint_count = 14;
+	const int32_t utf8_byte_count = 38;
+	const int32_t utf16_unit_count = 18;
+	ENSURE(skb_editor_get_text_utf32_count(editor) == codepoint_count);
+	ENSURE(skb_editor_get_text_utf8_count(editor) == utf8_byte_count);
+
+	for (int32_t codepoint_offset = 0; codepoint_offset <= codepoint_count; codepoint_offset++) {
+		int32_t utf8_byte_offset = -1;
+		int32_t utf16_unit_offset = -1;
+		int32_t roundtrip_codepoint_offset = -1;
+		ENSURE(skb_editor_codepoint_to_utf8_byte_offset(editor, codepoint_offset, &utf8_byte_offset) == SKB_RESULT_SUCCESS);
+		ENSURE(skb_editor_codepoint_to_utf16_unit_offset(editor, codepoint_offset, &utf16_unit_offset) == SKB_RESULT_SUCCESS);
+		ENSURE(skb_editor_utf8_byte_offset_to_codepoint(editor, utf8_byte_offset, &roundtrip_codepoint_offset) == SKB_RESULT_SUCCESS);
+		ENSURE(roundtrip_codepoint_offset == codepoint_offset);
+		ENSURE(skb_editor_utf16_unit_offset_to_codepoint(editor, utf16_unit_offset, &roundtrip_codepoint_offset) == SKB_RESULT_SUCCESS);
+		ENSURE(roundtrip_codepoint_offset == codepoint_offset);
+	}
+
+	int32_t offset = -1;
+	ENSURE(skb_editor_codepoint_to_utf8_byte_offset(editor, 4, &offset) == SKB_RESULT_SUCCESS);
+	ENSURE(offset == 6);
+	ENSURE(skb_editor_codepoint_to_utf8_byte_offset(editor, 11, &offset) == SKB_RESULT_SUCCESS);
+	ENSURE(offset == 31);
+	ENSURE(skb_editor_codepoint_to_utf16_unit_offset(editor, 4, &offset) == SKB_RESULT_SUCCESS);
+	ENSURE(offset == 4);
+	ENSURE(skb_editor_codepoint_to_utf16_unit_offset(editor, 11, &offset) == SKB_RESULT_SUCCESS);
+	ENSURE(offset == 15);
+	ENSURE(skb_editor_codepoint_to_utf8_byte_offset(editor, codepoint_count, &offset) == SKB_RESULT_SUCCESS);
+	ENSURE(offset == utf8_byte_count);
+	ENSURE(skb_editor_codepoint_to_utf16_unit_offset(editor, codepoint_count, &offset) == SKB_RESULT_SUCCESS);
+	ENSURE(offset == utf16_unit_count);
+
+	// Reject negative, out-of-range, and non-boundary offsets. In particular,
+	// byte 2 is the second byte of é and UTF-16 unit 5 is inside the first
+	// emoji's surrogate pair.
+	ENSURE(skb_editor_codepoint_to_utf8_byte_offset(editor, -1, &offset) == SKB_RESULT_INVALID_RANGE);
+	ENSURE(skb_editor_codepoint_to_utf8_byte_offset(editor, codepoint_count + 1, &offset) == SKB_RESULT_INVALID_RANGE);
+	ENSURE(skb_editor_utf8_byte_offset_to_codepoint(editor, 2, &offset) == SKB_RESULT_INVALID_RANGE);
+	ENSURE(skb_editor_utf8_byte_offset_to_codepoint(editor, utf8_byte_count + 1, &offset) == SKB_RESULT_INVALID_RANGE);
+	ENSURE(skb_editor_codepoint_to_utf16_unit_offset(editor, -1, &offset) == SKB_RESULT_INVALID_RANGE);
+	ENSURE(skb_editor_codepoint_to_utf16_unit_offset(editor, codepoint_count + 1, &offset) == SKB_RESULT_INVALID_RANGE);
+	ENSURE(skb_editor_utf16_unit_offset_to_codepoint(editor, 5, &offset) == SKB_RESULT_INVALID_RANGE);
+	ENSURE(skb_editor_utf16_unit_offset_to_codepoint(editor, utf16_unit_count + 1, &offset) == SKB_RESULT_INVALID_RANGE);
+	ENSURE(skb_editor_codepoint_to_utf8_byte_offset(NULL, 0, &offset) == SKB_RESULT_INVALID_ARGUMENT);
+	ENSURE(skb_editor_utf16_unit_offset_to_codepoint(editor, 0, NULL) == SKB_RESULT_INVALID_ARGUMENT);
+
+	skb_editor_destroy(editor);
+	skb_font_collection_destroy(font_collection);
+	skb_temp_alloc_destroy(temp_alloc);
+	return 0;
+}
+
 int editor_tests(void)
 {
 	RUN_SUBTEST(test_init);
@@ -665,5 +737,6 @@ int editor_tests(void)
 	RUN_SUBTEST(test_option_word_navigation_macos);
 	RUN_SUBTEST(test_word_start_at_document_start);
 	RUN_SUBTEST(test_edit_transaction);
+	RUN_SUBTEST(test_document_offset_mappings);
 	return 0;
 }

@@ -728,6 +728,103 @@ int32_t skb_editor_get_text_utf32(const skb_editor_t* editor, uint32_t* utf32, i
 	return count;
 }
 
+static int32_t skb__utf16_units_for_codepoint(uint32_t codepoint)
+{
+	return codepoint > 0xffffu ? 2 : 1;
+}
+
+static skb_result_t skb__codepoint_to_encoded_offset(const skb_editor_t* editor, int32_t codepoint_offset, int32_t* encoded_offset, bool utf16)
+{
+	if (!editor || !encoded_offset)
+		return SKB_RESULT_INVALID_ARGUMENT;
+	if (codepoint_offset < 0)
+		return SKB_RESULT_INVALID_RANGE;
+
+	int64_t current_codepoint = 0;
+	int64_t current_encoded = 0;
+	for (int32_t paragraph_idx = 0; paragraph_idx < skb__get_paragraph_count(editor); paragraph_idx++) {
+		const skb_text_t* paragraph_text = skb__get_text(editor, paragraph_idx);
+		const uint32_t* codepoints = skb_text_get_utf32(paragraph_text);
+		const int32_t codepoint_count = skb_text_get_utf32_count(paragraph_text);
+		for (int32_t text_idx = 0; text_idx < codepoint_count; text_idx++) {
+			if (current_codepoint == codepoint_offset) {
+				if (current_encoded > INT32_MAX)
+					return SKB_RESULT_INVALID_RANGE;
+				*encoded_offset = (int32_t)current_encoded;
+				return SKB_RESULT_SUCCESS;
+			}
+
+			const int32_t units = utf16 ? skb__utf16_units_for_codepoint(codepoints[text_idx]) : skb_utf8_num_units(codepoints[text_idx]);
+			if (units <= 0)
+				return SKB_RESULT_INVALID_RANGE;
+			current_codepoint++;
+			current_encoded += units;
+		}
+	}
+
+	if (current_codepoint != codepoint_offset || current_encoded > INT32_MAX)
+		return SKB_RESULT_INVALID_RANGE;
+	*encoded_offset = (int32_t)current_encoded;
+	return SKB_RESULT_SUCCESS;
+}
+
+static skb_result_t skb__encoded_offset_to_codepoint(const skb_editor_t* editor, int32_t encoded_offset, int32_t* codepoint_offset, bool utf16)
+{
+	if (!editor || !codepoint_offset)
+		return SKB_RESULT_INVALID_ARGUMENT;
+	if (encoded_offset < 0)
+		return SKB_RESULT_INVALID_RANGE;
+
+	int64_t current_codepoint = 0;
+	int64_t current_encoded = 0;
+	for (int32_t paragraph_idx = 0; paragraph_idx < skb__get_paragraph_count(editor); paragraph_idx++) {
+		const skb_text_t* paragraph_text = skb__get_text(editor, paragraph_idx);
+		const uint32_t* codepoints = skb_text_get_utf32(paragraph_text);
+		const int32_t codepoint_count = skb_text_get_utf32_count(paragraph_text);
+		for (int32_t text_idx = 0; text_idx < codepoint_count; text_idx++) {
+			if (current_encoded == encoded_offset) {
+				if (current_codepoint > INT32_MAX)
+					return SKB_RESULT_INVALID_RANGE;
+				*codepoint_offset = (int32_t)current_codepoint;
+				return SKB_RESULT_SUCCESS;
+			}
+
+			const int32_t units = utf16 ? skb__utf16_units_for_codepoint(codepoints[text_idx]) : skb_utf8_num_units(codepoints[text_idx]);
+			if (units <= 0)
+				return SKB_RESULT_INVALID_RANGE;
+			current_encoded += units;
+			if (current_encoded > encoded_offset)
+				return SKB_RESULT_INVALID_RANGE;
+			current_codepoint++;
+		}
+	}
+
+	if (current_encoded != encoded_offset || current_codepoint > INT32_MAX)
+		return SKB_RESULT_INVALID_RANGE;
+	*codepoint_offset = (int32_t)current_codepoint;
+	return SKB_RESULT_SUCCESS;
+}
+
+skb_result_t skb_editor_codepoint_to_utf8_byte_offset(const skb_editor_t* editor, int32_t codepoint_offset, int32_t* utf8_byte_offset)
+{
+	return skb__codepoint_to_encoded_offset(editor, codepoint_offset, utf8_byte_offset, false);
+}
+
+skb_result_t skb_editor_utf8_byte_offset_to_codepoint(const skb_editor_t* editor, int32_t utf8_byte_offset, int32_t* codepoint_offset)
+{
+	return skb__encoded_offset_to_codepoint(editor, utf8_byte_offset, codepoint_offset, false);
+}
+
+skb_result_t skb_editor_codepoint_to_utf16_unit_offset(const skb_editor_t* editor, int32_t codepoint_offset, int32_t* utf16_unit_offset)
+{
+	return skb__codepoint_to_encoded_offset(editor, codepoint_offset, utf16_unit_offset, true);
+}
+
+skb_result_t skb_editor_utf16_unit_offset_to_codepoint(const skb_editor_t* editor, int32_t utf16_unit_offset, int32_t* codepoint_offset)
+{
+	return skb__encoded_offset_to_codepoint(editor, utf16_unit_offset, codepoint_offset, true);
+}
+
 const skb_rich_text_t* skb_editor_get_rich_text(const skb_editor_t* editor)
 {
 	assert(editor);

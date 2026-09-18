@@ -17,8 +17,8 @@ extern "C" {
  * modifies the text buffer.
  *
  * The text is internally stored as utf-32 (unicode codepoints), the text positions are also tracked as codepoints.
- * There are functions to get utf-8 version of the text out, and skb_utf8_codepoint_offset() can be used to covert
- * the text positions.
+ * There are functions to get utf-8 version of the text out, and exact
+ * document-level offset conversion functions for platform text protocols.
  *
  * In order to support partial updates, the text is split into paragraphs at paragraph break characters.
  * Each paragraph has its own layout, which may consist of multiple lines. Externally text positions are
@@ -344,6 +344,57 @@ SKB_API int32_t skb_editor_get_text_utf32_count(const skb_editor_t* editor);
  * @return total length of the string (can be larger than buf_cap).
  */
 SKB_API int32_t skb_editor_get_text_utf32(const skb_editor_t* editor, uint32_t* utf32, int32_t utf32_cap);
+
+/**
+ * Converts a codepoint offset to an exact UTF-8 byte offset in the document.
+ *
+ * Both offsets describe boundaries, so the end of the document is a valid
+ * offset. The result is written only on success.
+ *
+ * @param editor editor to query.
+ * @param codepoint_offset document offset measured in UTF-32 codepoints.
+ * @param utf8_byte_offset (out) document offset measured in UTF-8 bytes.
+ * @return SKB_RESULT_SUCCESS, or an invalid argument/range result.
+ */
+SKB_API skb_result_t skb_editor_codepoint_to_utf8_byte_offset(const skb_editor_t* editor, int32_t codepoint_offset, int32_t* utf8_byte_offset);
+
+/**
+ * Converts an exact UTF-8 byte boundary to a codepoint offset.
+ *
+ * Byte offsets inside a multi-byte UTF-8 sequence are rejected.
+ *
+ * @param editor editor to query.
+ * @param utf8_byte_offset document offset measured in UTF-8 bytes.
+ * @param codepoint_offset (out) document offset measured in UTF-32 codepoints.
+ * @return SKB_RESULT_SUCCESS, or an invalid argument/range result.
+ */
+SKB_API skb_result_t skb_editor_utf8_byte_offset_to_codepoint(const skb_editor_t* editor, int32_t utf8_byte_offset, int32_t* codepoint_offset);
+
+/**
+ * Converts a codepoint offset to an exact UTF-16 code-unit offset in the
+ * document.
+ *
+ * The result is written only on success and the end of the document is a
+ * valid offset.
+ *
+ * @param editor editor to query.
+ * @param codepoint_offset document offset measured in UTF-32 codepoints.
+ * @param utf16_unit_offset (out) document offset measured in UTF-16 code units.
+ * @return SKB_RESULT_SUCCESS, or an invalid argument/range result.
+ */
+SKB_API skb_result_t skb_editor_codepoint_to_utf16_unit_offset(const skb_editor_t* editor, int32_t codepoint_offset, int32_t* utf16_unit_offset);
+
+/**
+ * Converts an exact UTF-16 code-unit boundary to a codepoint offset.
+ *
+ * Offsets inside a surrogate pair are rejected.
+ *
+ * @param editor editor to query.
+ * @param utf16_unit_offset document offset measured in UTF-16 code units.
+ * @param codepoint_offset (out) document offset measured in UTF-32 codepoints.
+ * @return SKB_RESULT_SUCCESS, or an invalid argument/range result.
+ */
+SKB_API skb_result_t skb_editor_utf16_unit_offset_to_codepoint(const skb_editor_t* editor, int32_t utf16_unit_offset, int32_t* codepoint_offset);
 
 /**
  * Gets const pointer to the edited rich text.
