@@ -1818,6 +1818,48 @@ void skb_editor_iterate_text_range_bounds(const skb_editor_t* editor, skb_text_r
 	skb_rich_layout_get_text_range_bounds(&editor->rich_layout, text_range, callback, context);
 }
 
+void skb_editor_iterate_text_range_bounds_with_ranges(const skb_editor_t* editor, skb_text_range_t text_range, skb_text_range_bounds_with_range_func_t* callback, void* context)
+{
+	assert(editor);
+	assert(skb__are_paragraphs_in_sync(editor));
+	assert(callback);
+
+	if (skb_text_range_is_current_selection(text_range))
+		text_range = skb_editor_get_current_selection(editor);
+
+	skb_rich_layout_get_text_range_bounds_with_ranges(&editor->rich_layout, text_range, callback, context);
+}
+
+skb_result_t skb_editor_get_surrounding_text_range(const skb_editor_t* editor, int32_t max_before, int32_t max_after, skb_text_range_t* text_range)
+{
+	if (!editor || !text_range)
+		return SKB_RESULT_INVALID_ARGUMENT;
+	if (max_before < 0 || max_after < 0)
+		return SKB_RESULT_INVALID_RANGE;
+
+	const skb_text_range_t selection = skb_editor_get_current_selection(editor);
+	const skb_text_position_t ordered_start = skb_editor_get_selection_ordered_start(editor, selection);
+	const skb_text_position_t ordered_end = skb_editor_get_selection_ordered_end(editor, selection);
+	const int32_t document_length = skb_editor_get_text_utf32_count(editor);
+	if (ordered_start.offset < 0 || ordered_end.offset < ordered_start.offset || ordered_end.offset > document_length)
+		return SKB_RESULT_INVALID_RANGE;
+
+	int64_t start = (int64_t)ordered_start.offset - max_before;
+	int64_t end = (int64_t)ordered_end.offset + max_after;
+	if (start < 0)
+		start = 0;
+	if (end > document_length)
+		end = document_length;
+	if (start > INT32_MAX || end > INT32_MAX)
+		return SKB_RESULT_INVALID_RANGE;
+
+	*text_range = (skb_text_range_t) {
+		.start = { .offset = (int32_t)start, .affinity = SKB_AFFINITY_NONE },
+		.end = { .offset = (int32_t)end, .affinity = SKB_AFFINITY_NONE },
+	};
+	return SKB_RESULT_SUCCESS;
+}
+
 enum {
 	SKB_DRAG_NONE,
 	SKB_DRAG_CHAR,

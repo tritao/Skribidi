@@ -93,4 +93,6 @@ typedef struct skb_layout_t {
 skb_layout_t skb_layout_make_empty(void);
 bool skb_layout_add_ellipsis_to_last_line(skb_layout_t* layout);
 
+void skb__layout_iterate_text_range_bounds_with_ranges(const skb_layout_t* layout, skb_vec2_t offset, skb_text_range_t text_range, skb_text_range_bounds_func_t* callback, skb_text_range_bounds_with_range_func_t* callback_with_ranges, void* context);
+
 #endif // SKB_LAYOUT_INTERNAL_H

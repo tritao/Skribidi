@@ -11,12 +11,24 @@ typedef struct edit_callback_state_t {
 	int text_change_count;
 } edit_callback_state_t;
 
+typedef struct range_geometry_state_t {
+	int rect_count;
+	bool invalid;
+} range_geometry_state_t;
+
 static void on_edit_text_change(skb_editor_t* editor, skb_editor_text_change_reason_t reason, void* context)
 {
 	SKB_UNUSED(editor);
 	SKB_UNUSED(reason);
 	edit_callback_state_t* state = context;
 	state->text_change_count++;
+}
+
+static void on_range_geometry(skb_rect2_t rect, skb_range_t text_range, void* context)
+{
+	range_geometry_state_t* state = context;
+	state->rect_count++;
+	state->invalid = state->invalid || rect.width < 0.f || rect.height < 0.f || text_range.start < 0 || text_range.end <= text_range.start;
 }
 
 static int test_init(void)
@@ -721,6 +733,26 @@ static int test_document_offset_mappings(void)
 	ENSURE(skb_editor_utf16_unit_offset_to_codepoint(editor, utf16_unit_count + 1, &offset) == SKB_RESULT_INVALID_RANGE);
 	ENSURE(skb_editor_codepoint_to_utf8_byte_offset(NULL, 0, &offset) == SKB_RESULT_INVALID_ARGUMENT);
 	ENSURE(skb_editor_utf16_unit_offset_to_codepoint(editor, 0, NULL) == SKB_RESULT_INVALID_ARGUMENT);
+
+	// Geometry carries the logical range for each visual rectangle, including
+	// the global paragraph offset. This is what platform candidate and
+	// accessibility queries need instead of guessing from a flat rectangle.
+	range_geometry_state_t geometry = {0};
+	skb_editor_iterate_text_range_bounds_with_ranges(editor, (skb_text_range_t){
+		.start = {.offset = 0, .affinity = SKB_AFFINITY_NONE},
+		.end = {.offset = codepoint_count, .affinity = SKB_AFFINITY_NONE},
+	}, on_range_geometry, &geometry);
+	ENSURE(geometry.rect_count > 0 && !geometry.invalid);
+
+	skb_editor_set_selection(editor, (skb_selection_t){
+		.anchor = {.offset = 4, .affinity = SKB_AFFINITY_TRAILING},
+		.focus = {.offset = 2, .affinity = SKB_AFFINITY_TRAILING},
+	});
+	skb_text_range_t surrounding = {0};
+	ENSURE(skb_editor_get_surrounding_text_range(editor, 1, 1, &surrounding) == SKB_RESULT_SUCCESS);
+	ENSURE(surrounding.start.offset == 1 && surrounding.end.offset == 5);
+	ENSURE(skb_editor_get_surrounding_text_range(editor, -1, 1, &surrounding) == SKB_RESULT_INVALID_RANGE);
+	ENSURE(skb_editor_get_surrounding_text_range(editor, 1, 1, NULL) == SKB_RESULT_INVALID_ARGUMENT);
 
 	skb_editor_destroy(editor);
 	skb_font_collection_destroy(font_collection);

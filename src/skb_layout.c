@@ -4116,6 +4116,22 @@ void skb_layout_iterate_text_range_bounds_with_offset(const skb_layout_t* layout
 	assert(layout);
 	assert(callback);
 
+	skb__layout_iterate_text_range_bounds_with_ranges(layout, offset, text_range, callback, NULL, context);
+}
+
+void skb_layout_iterate_text_range_bounds_with_ranges(const skb_layout_t* layout, skb_text_range_t text_range, skb_text_range_bounds_with_range_func_t* callback, void* context)
+{
+	assert(layout);
+	assert(callback);
+
+	skb__layout_iterate_text_range_bounds_with_ranges(layout, (skb_vec2_t){0}, text_range, NULL, callback, context);
+}
+
+void skb__layout_iterate_text_range_bounds_with_ranges(const skb_layout_t* layout, skb_vec2_t offset, skb_text_range_t text_range, skb_text_range_bounds_func_t* callback, skb_text_range_bounds_with_range_func_t* callback_with_ranges, void* context)
+{
+	assert(layout);
+	assert(callback || callback_with_ranges);
+
 	skb_range_t sel_range = skb_layout_get_offset_range_from_text_range(layout, text_range);
 
 	for (int32_t li = 0; li < layout->lines_count; li++) {
@@ -4210,7 +4226,10 @@ void skb_layout_iterate_text_range_bounds_with_offset(const skb_layout_t* layout
 									.width = rect_end_x - rect_start_x,
 									.height = -line->ascender + line->descender,
 								};
-								callback(rect, context);
+								if (callback_with_ranges)
+									callback_with_ranges(rect, rect_text_range, context);
+								else
+									callback(rect, context);
 							}
 							rect_text_range.start = selected_cluster_text_range.start;
 							rect_text_range.end = selected_cluster_text_range.end;
@@ -4234,7 +4253,10 @@ void skb_layout_iterate_text_range_bounds_with_offset(const skb_layout_t* layout
 						.width = rect_end_x - rect_start_x,
 						.height = -line->ascender + line->descender,
 					};
-					callback(rect, context);
+					if (callback_with_ranges)
+						callback_with_ranges(rect, rect_text_range, context);
+					else
+						callback(rect, context);
 				}
 
 				x += layout_run->padding.right;

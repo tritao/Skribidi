@@ -12,6 +12,7 @@
 #include "skribidi/skb_layout.h"
 
 #include "skb_common_internal.h"
+#include "skb_layout_internal.h"
 #include "skb_rich_layout_internal.h"
 
 
@@ -510,6 +511,77 @@ void skb_rich_layout_get_text_range_bounds(const skb_rich_layout_t* rich_layout,
 		.end = { .offset = end_pos.text_offset },
 	};
 	skb_layout_iterate_text_range_bounds_with_offset(&last_paragraph->layout, last_paragraph->offset, last_paragraph_sel, callback, context);
+}
+
+typedef struct skb__rich_layout_text_range_bounds_context_t {
+	skb_text_range_bounds_with_range_func_t* callback;
+	void* context;
+	int32_t global_text_offset;
+} skb__rich_layout_text_range_bounds_context_t;
+
+static void skb__rich_layout_text_range_bounds_callback(skb_rect2_t rect, skb_range_t text_range, void* context)
+{
+	skb__rich_layout_text_range_bounds_context_t* callback_context = context;
+	text_range.start += callback_context->global_text_offset;
+	text_range.end += callback_context->global_text_offset;
+	callback_context->callback(rect, text_range, callback_context->context);
+}
+
+void skb_rich_layout_get_text_range_bounds_with_ranges(const skb_rich_layout_t* rich_layout, skb_text_range_t text_range, skb_text_range_bounds_with_range_func_t* callback, void* context)
+{
+	assert(rich_layout);
+	assert(callback);
+
+	skb_paragraph_position_t start_pos = skb__rich_layout_get_paragraph_position_from_text_position(rich_layout, text_range.start, SKB_AFFINITY_USE);
+	skb_paragraph_position_t end_pos = skb__rich_layout_get_paragraph_position_from_text_position(rich_layout, text_range.end, SKB_AFFINITY_USE);
+	if (!skb_paragraph_position_less_or_equal(start_pos, end_pos)) {
+		skb_paragraph_position_t tmp = start_pos;
+		start_pos = end_pos;
+		end_pos = tmp;
+	}
+
+	skb__rich_layout_text_range_bounds_context_t callback_context = {
+		.callback = callback,
+		.context = context,
+		.global_text_offset = 0,
+	};
+
+	if (start_pos.paragraph_idx == end_pos.paragraph_idx) {
+		const skb_layout_paragraph_t* paragraph = &rich_layout->paragraphs[start_pos.paragraph_idx];
+		const skb_text_range_t line_sel = {
+			.start = { .offset = start_pos.text_offset },
+			.end = { .offset = end_pos.text_offset },
+		};
+		callback_context.global_text_offset = paragraph->global_text_offset;
+		skb__layout_iterate_text_range_bounds_with_ranges(&paragraph->layout, paragraph->offset, line_sel, NULL, skb__rich_layout_text_range_bounds_callback, &callback_context);
+		return;
+	}
+
+	const skb_layout_paragraph_t* first_paragraph = &rich_layout->paragraphs[start_pos.paragraph_idx];
+	const skb_text_range_t first_paragraph_sel = {
+		.start = { .offset = start_pos.text_offset },
+		.end = { .offset = skb_layout_get_text_count(&first_paragraph->layout) },
+	};
+	callback_context.global_text_offset = first_paragraph->global_text_offset;
+	skb__layout_iterate_text_range_bounds_with_ranges(&first_paragraph->layout, first_paragraph->offset, first_paragraph_sel, NULL, skb__rich_layout_text_range_bounds_callback, &callback_context);
+
+	for (int32_t i = start_pos.paragraph_idx + 1; i < end_pos.paragraph_idx; i++) {
+		const skb_layout_paragraph_t* paragraph = &rich_layout->paragraphs[i];
+		const skb_text_range_t line_sel = {
+			.start = { .offset = 0 },
+			.end = { .offset = skb_layout_get_text_count(&paragraph->layout) },
+		};
+		callback_context.global_text_offset = paragraph->global_text_offset;
+		skb__layout_iterate_text_range_bounds_with_ranges(&paragraph->layout, paragraph->offset, line_sel, NULL, skb__rich_layout_text_range_bounds_callback, &callback_context);
+	}
+
+	const skb_layout_paragraph_t* last_paragraph = &rich_layout->paragraphs[end_pos.paragraph_idx];
+	const skb_text_range_t last_paragraph_sel = {
+		.start = { .offset = 0 },
+		.end = { .offset = end_pos.text_offset },
+	};
+	callback_context.global_text_offset = last_paragraph->global_text_offset;
+	skb__layout_iterate_text_range_bounds_with_ranges(&last_paragraph->layout, last_paragraph->offset, last_paragraph_sel, NULL, skb__rich_layout_text_range_bounds_callback, &callback_context);
 }
 
 skb_text_position_t skb_rich_layout_hit_test(const skb_rich_layout_t* rich_layout, skb_movement_type_t type, float hit_x, float hit_y)

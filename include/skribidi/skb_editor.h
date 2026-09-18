@@ -671,6 +671,26 @@ SKB_API skb_text_position_t skb_editor_hit_test(const skb_editor_t* editor, skb_
 SKB_API void skb_editor_iterate_text_range_bounds(const skb_editor_t* editor, skb_text_range_t text_range, skb_text_range_bounds_func_t* callback, void* context);
 
 /**
+ * Iterates over visual rectangles and their logical document codepoint
+ * ranges. This is the authoritative geometry query for IME and accessibility
+ * adapters.
+ */
+SKB_API void skb_editor_iterate_text_range_bounds_with_ranges(const skb_editor_t* editor, skb_text_range_t text_range, skb_text_range_bounds_with_range_func_t* callback, void* context);
+
+/**
+ * Returns the document range to expose as surrounding text around the current
+ * selection. The limits are measured in codepoints before and after the
+ * ordered selection. The selection itself is always included.
+ *
+ * @param editor editor to query.
+ * @param max_before maximum codepoints before the selection.
+ * @param max_after maximum codepoints after the selection.
+ * @param text_range (out) absolute document range for the surrounding text.
+ * @return SKB_RESULT_SUCCESS, or an invalid argument/range result.
+ */
+SKB_API skb_result_t skb_editor_get_surrounding_text_range(const skb_editor_t* editor, int32_t max_before, int32_t max_after, skb_text_range_t* text_range);
+
+/**
  * Sets temporary IME composition text as utf-32. The text will be laid out at the current cursor location.
  * The function can be called multiple times during while the user composes the input.
  * Use skb_editor_commit_composition_utf32() to commit or skb_editor_clear_composition() to clear the composition text.

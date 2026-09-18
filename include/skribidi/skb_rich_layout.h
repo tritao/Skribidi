@@ -115,6 +115,12 @@ SKB_API skb_caret_info_t skb_rich_layout_get_caret_info_at(const skb_rich_layout
 SKB_API void skb_rich_layout_get_text_range_bounds(const skb_rich_layout_t* rich_layout, skb_text_range_t text_range, skb_text_range_bounds_func_t* callback, void* context);
 
 /**
+ * Iterates over visual rectangles and their logical document codepoint
+ * ranges. The ranges include each paragraph's global text offset.
+ */
+SKB_API void skb_rich_layout_get_text_range_bounds_with_ranges(const skb_rich_layout_t* rich_layout, skb_text_range_t text_range, skb_text_range_bounds_with_range_func_t* callback, void* context);
+
+/**
  * Returns caret text position under the hit location.
  * First or last line is tested if the hit location is outside the vertical bounds.
  * Start or end of the line is returned if the hit location is outside the horizontal bounds.

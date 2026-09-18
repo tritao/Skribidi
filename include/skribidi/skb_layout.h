@@ -954,6 +954,15 @@ SKB_API int32_t skb_layout_get_text_range_count(const skb_layout_t* layout, skb_
 typedef void skb_text_range_bounds_func_t(skb_rect2_t rect, void* context);
 
 /**
+ * Signature of a text range bounds callback that also reports the logical
+ * codepoint range represented by each visual rectangle.
+ * @param rect rectangle that has part of the text range.
+ * @param text_range logical codepoint range represented by the rectangle.
+ * @param context context passed to the range bounds query.
+ */
+typedef void skb_text_range_bounds_with_range_func_t(skb_rect2_t rect, skb_range_t text_range, void* context);
+
+/**
  * Iterates over set of bounding rectangles that represent the text range.
  * Due to bidirectional text the selection in logical order can span across multiple visual rectangles.
  * @param layout layout to use.
@@ -962,6 +971,15 @@ typedef void skb_text_range_bounds_func_t(skb_rect2_t rect, void* context);
  * @param context context passed to the callback.
  */
 SKB_API void skb_layout_iterate_text_range_bounds(const skb_layout_t* layout, skb_text_range_t text_range, skb_text_range_bounds_func_t* callback, void* context);
+
+/**
+ * Iterates over visual rectangles and their logical codepoint ranges.
+ *
+ * The reported ranges are half-open and are expressed in this layout's text
+ * coordinates. Bidirectional text may produce multiple visual rectangles for
+ * one logical range.
+ */
+SKB_API void skb_layout_iterate_text_range_bounds_with_ranges(const skb_layout_t* layout, skb_text_range_t text_range, skb_text_range_bounds_with_range_func_t* callback, void* context);
 
 /**
  * Iterates over set of bounding rectangles that represent the text range.
