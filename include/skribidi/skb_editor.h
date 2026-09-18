@@ -71,6 +71,10 @@ typedef struct skb_edit_transaction_t {
 	const skb_text_t* replacement_text;
 	/** Selection after the replacement has been applied. */
 	skb_selection_t resulting_selection;
+	/** Whether the resulting document contains an active composition range. */
+	bool has_composition;
+	/** Active composition range after the replacement, in document coordinates. */
+	skb_text_range_t composition_range;
 	/** History grouping hint for this edit. */
 	skb_edit_history_kind_t history_kind;
 } skb_edit_transaction_t;
@@ -505,6 +509,12 @@ SKB_API skb_text_range_t skb_editor_get_current_selection(const skb_editor_t* ed
 
 /** @return current directional selection of the editor. */
 SKB_API skb_selection_t skb_editor_get_selection(const skb_editor_t* editor);
+
+/** @return true if the editor has an active document-backed composition. */
+SKB_API bool skb_editor_has_composition(const skb_editor_t* editor);
+
+/** @return the active document-backed composition range. */
+SKB_API skb_text_range_t skb_editor_get_composition(const skb_editor_t* editor);
 
 /**
  * Sets the current selection of the editor to specific range.

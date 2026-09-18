@@ -47,6 +47,10 @@ typedef struct skb__editor_undo_transaction_t {
 	skb_range_t states_range;		// Removed text range before replace.
 	skb_text_range_t selection_before;	// Selection before the change.
 	skb_text_range_t selection_after;	// Selection after at the change (at the point of undo).
+	bool has_composition_before;
+	skb_text_range_t composition_before;
+	bool has_composition_after;
+	skb_text_range_t composition_after;
 	skb_edit_history_kind_t history_kind;
 } skb__editor_undo_transaction_t;
 
@@ -94,6 +98,8 @@ typedef struct skb_editor_t {
 	skb_vec2_t view_offset;
 
 	// IME
+	bool has_document_composition;
+	skb_text_range_t document_composition;
 	skb_text_t composition_text;
 	int32_t composition_text_offset;				// Global text offset where the composition is displayed.
 	skb_text_position_t composition_selection_base;	// Base position for setting the composition selection.
@@ -1592,6 +1598,18 @@ skb_selection_t skb_editor_get_selection(const skb_editor_t* editor)
 	return skb__text_range_to_selection(skb_editor_get_current_selection(editor));
 }
 
+bool skb_editor_has_composition(const skb_editor_t* editor)
+{
+	assert(editor);
+	return editor->has_document_composition;
+}
+
+skb_text_range_t skb_editor_get_composition(const skb_editor_t* editor)
+{
+	assert(editor);
+	return editor->document_composition;
+}
+
 void skb_editor_select(skb_editor_t* editor, skb_text_range_t text_range)
 {
 	assert(editor);
@@ -1980,6 +1998,8 @@ int32_t skb_editor_undo_transaction_begin(skb_editor_t* editor)
 		transaction->states_range.start = editor->undo_states_count;
 		transaction->states_range.end = editor->undo_states_count;
 		transaction->selection_before = editor->selection;
+		transaction->has_composition_before = editor->has_document_composition;
+		transaction->composition_before = editor->document_composition;
 	}
 	editor->in_undo_transaction++;
 	return editor->in_undo_transaction;
@@ -2016,6 +2036,8 @@ void skb_editor_undo(skb_editor_t* editor, skb_temp_alloc_t* temp_alloc)
 
 		// Store the selection to come back to if we redo.
 		undo_transaction->selection_after = editor->selection;
+		undo_transaction->has_composition_after = editor->has_document_composition;
+		undo_transaction->composition_after = editor->document_composition;
 
 		// Undo states in reverse order
 		for (int32_t i = undo_transaction->states_range.end - 1; i >= undo_transaction->states_range.start; i--) {
@@ -2030,6 +2052,8 @@ void skb_editor_undo(skb_editor_t* editor, skb_temp_alloc_t* temp_alloc)
 		}
 
 		editor->selection = undo_transaction->selection_before;
+		editor->has_document_composition = undo_transaction->has_composition_before;
+		editor->document_composition = undo_transaction->composition_before;
 		editor->preferred_x = -1.f; // reset preferred.
 
 		skb__update_layout(editor, temp_alloc, (skb_rich_text_change_t){0});
@@ -2066,6 +2090,8 @@ void skb_editor_redo(skb_editor_t* editor, skb_temp_alloc_t* temp_alloc)
 		}
 
 		editor->selection = undo_transaction->selection_after;
+		editor->has_document_composition = undo_transaction->has_composition_after;
+		editor->document_composition = undo_transaction->composition_after;
 		editor->preferred_x = -1.f; // reset preferred.
 
 		skb__update_layout(editor, temp_alloc, (skb_rich_text_change_t){0});
@@ -2630,7 +2656,8 @@ static void skb__set_last_history_kind(skb_editor_t* editor, skb_edit_history_ki
 static void skb__insert_rich_text_internal(
 	skb_editor_t* editor, skb_temp_alloc_t* temp_alloc, skb_text_range_t text_range,
 	const skb_rich_text_t* rich_text, bool allow_amend_undo, bool external,
-	const skb_selection_t* resulting_selection, skb_edit_history_kind_t history_kind)
+	const skb_selection_t* resulting_selection, skb_edit_history_kind_t history_kind,
+	bool update_composition, bool has_composition, skb_text_range_t composition_range)
 {
 	const bool is_current_selection = skb_text_range_is_current_selection(text_range);
 	text_range = skb__resolve_text_range(editor, text_range);
@@ -2659,6 +2686,10 @@ static void skb__insert_rich_text_internal(
 	}
 	if (resulting_selection)
 		editor->selection = skb__selection_to_text_range(*resulting_selection);
+	if (update_composition) {
+		editor->has_document_composition = has_composition;
+		editor->document_composition = composition_range;
+	}
 
 	skb__capture_undo_text_end(editor, transaction_id);
 
@@ -2674,7 +2705,8 @@ static void skb__insert_rich_text(
 	const skb_rich_text_t* rich_text, bool allow_amend_undo, bool external)
 {
 	skb__insert_rich_text_internal(editor, temp_alloc, text_range, rich_text,
-		allow_amend_undo, external, NULL, SKB_EDIT_HISTORY_GENERIC);
+		allow_amend_undo, external, NULL, SKB_EDIT_HISTORY_GENERIC,
+		false, false, (skb_text_range_t){0});
 }
 
 static skb_rich_text_t* skb__make_scratch_text_input(skb_editor_t* editor, skb_temp_alloc_t* temp_alloc, const skb_text_t* text)
@@ -2722,13 +2754,19 @@ skb_result_t skb_editor_apply_transaction(skb_editor_t* editor, skb_temp_alloc_t
 	if (!skb__is_valid_transaction_position(transaction->resulting_selection.anchor, new_text_count)
 		|| !skb__is_valid_transaction_position(transaction->resulting_selection.focus, new_text_count))
 		return SKB_RESULT_INVALID_RANGE;
+	if (transaction->has_composition
+		&& (transaction->composition_range.start.offset > transaction->composition_range.end.offset
+			|| !skb__is_valid_transaction_position(transaction->composition_range.start, new_text_count)
+			|| !skb__is_valid_transaction_position(transaction->composition_range.end, new_text_count)))
+		return SKB_RESULT_INVALID_RANGE;
 
 	const skb_rich_text_t* replacement_text = NULL;
 	if (transaction->replacement_text)
 		replacement_text = skb__make_scratch_text_input(editor, temp_alloc, transaction->replacement_text);
 
 	skb__insert_rich_text_internal(editor, temp_alloc, transaction->replacement,
-		replacement_text, false, true, &transaction->resulting_selection, transaction->history_kind);
+		replacement_text, false, true, &transaction->resulting_selection, transaction->history_kind,
+		true, transaction->has_composition, transaction->composition_range);
 	return SKB_RESULT_SUCCESS;
 }
 

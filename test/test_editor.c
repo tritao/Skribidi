@@ -541,6 +541,62 @@ static int test_edit_transaction(void)
 	skb_editor_get_text_utf8(editor, text, (int32_t)sizeof(text));
 	ENSURE(strcmp(text, "hilo") == 0);
 
+	skb_text_reset(replacement_text);
+	skb_text_append_utf8(replacement_text, "日", -1, (skb_attribute_set_t){0});
+	transaction.replacement = (skb_text_range_t){
+		.start = {.offset = 1, .affinity = SKB_AFFINITY_TRAILING},
+		.end = {.offset = 1, .affinity = SKB_AFFINITY_TRAILING},
+	};
+	transaction.replacement_text = replacement_text;
+	transaction.resulting_selection = (skb_selection_t){
+		.anchor = {.offset = 2, .affinity = SKB_AFFINITY_TRAILING},
+		.focus = {.offset = 2, .affinity = SKB_AFFINITY_TRAILING},
+	};
+	transaction.has_composition = true;
+	transaction.composition_range = (skb_text_range_t){
+		.start = {.offset = 1, .affinity = SKB_AFFINITY_TRAILING},
+		.end = {.offset = 2, .affinity = SKB_AFFINITY_TRAILING},
+	};
+	transaction.history_kind = SKB_EDIT_HISTORY_COMPOSITION;
+	ENSURE(skb_editor_apply_transaction(editor, temp_alloc, &transaction) == SKB_RESULT_SUCCESS);
+	memset(text, 0, sizeof(text));
+	skb_editor_get_text_utf8(editor, text, (int32_t)sizeof(text));
+	ENSURE(strcmp(text, "h日ilo") == 0);
+	ENSURE(skb_editor_has_composition(editor));
+	skb_text_range_t composition = skb_editor_get_composition(editor);
+	ENSURE(composition.start.offset == 1 && composition.end.offset == 2);
+
+	skb_temp_alloc_reset(temp_alloc);
+	skb_editor_undo(editor, temp_alloc);
+	memset(text, 0, sizeof(text));
+	skb_editor_get_text_utf8(editor, text, (int32_t)sizeof(text));
+	ENSURE(strcmp(text, "hilo") == 0 && !skb_editor_has_composition(editor));
+
+	skb_temp_alloc_reset(temp_alloc);
+	skb_editor_redo(editor, temp_alloc);
+	memset(text, 0, sizeof(text));
+	skb_editor_get_text_utf8(editor, text, (int32_t)sizeof(text));
+	ENSURE(strcmp(text, "h日ilo") == 0 && skb_editor_has_composition(editor));
+
+	skb_text_reset(replacement_text);
+	skb_text_append_utf8(replacement_text, "日本", -1, (skb_attribute_set_t){0});
+	transaction.replacement = (skb_text_range_t){
+		.start = {.offset = 1, .affinity = SKB_AFFINITY_TRAILING},
+		.end = {.offset = 2, .affinity = SKB_AFFINITY_TRAILING},
+	};
+	transaction.replacement_text = replacement_text;
+	transaction.resulting_selection = (skb_selection_t){
+		.anchor = {.offset = 3, .affinity = SKB_AFFINITY_TRAILING},
+		.focus = {.offset = 3, .affinity = SKB_AFFINITY_TRAILING},
+	};
+	transaction.has_composition = false;
+	transaction.composition_range = (skb_text_range_t){0};
+	transaction.history_kind = SKB_EDIT_HISTORY_GENERIC;
+	ENSURE(skb_editor_apply_transaction(editor, temp_alloc, &transaction) == SKB_RESULT_SUCCESS);
+	memset(text, 0, sizeof(text));
+	skb_editor_get_text_utf8(editor, text, (int32_t)sizeof(text));
+	ENSURE(strcmp(text, "h日本ilo") == 0 && !skb_editor_has_composition(editor));
+
 	transaction.replacement = (skb_text_range_t){
 		.start = {.offset = 100, .affinity = SKB_AFFINITY_TRAILING},
 		.end = {.offset = 100, .affinity = SKB_AFFINITY_TRAILING},
@@ -548,7 +604,7 @@ static int test_edit_transaction(void)
 	ENSURE(skb_editor_apply_transaction(editor, temp_alloc, &transaction) == SKB_RESULT_INVALID_RANGE);
 	memset(text, 0, sizeof(text));
 	skb_editor_get_text_utf8(editor, text, (int32_t)sizeof(text));
-	ENSURE(strcmp(text, "hilo") == 0);
+	ENSURE(strcmp(text, "h日本ilo") == 0);
 
 	skb_text_destroy(replacement_text);
 	skb_editor_destroy(editor);
