@@ -517,6 +517,26 @@ SKB_API bool skb_editor_has_composition(const skb_editor_t* editor);
 SKB_API skb_text_range_t skb_editor_get_composition(const skb_editor_t* editor);
 
 /**
+ * Commits the active document-backed composition without changing its text.
+ *
+ * Composition updates are kept as one undo unit until this function is
+ * called. The committed text remains in the document and the composition
+ * metadata is cleared.
+ *
+ * @return true if an active composition was committed.
+ */
+SKB_API bool skb_editor_commit_composition(skb_editor_t* editor);
+
+/**
+ * Cancels the active document-backed composition and restores the document
+ * and selection from before the composition session.
+ *
+ * @param temp_alloc temporary allocator used while restoring layout.
+ * @return true if an active composition was cancelled.
+ */
+SKB_API bool skb_editor_cancel_composition(skb_editor_t* editor, skb_temp_alloc_t* temp_alloc);
+
+/**
  * Sets the current selection of the editor to specific range.
  * @param editor editor to change.
  * @param text_range new selection.

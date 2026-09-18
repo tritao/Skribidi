@@ -100,6 +100,10 @@ typedef struct skb_editor_t {
 	// IME
 	bool has_document_composition;
 	skb_text_range_t document_composition;
+	bool document_composition_undo_open;
+	int32_t document_composition_undo_id;
+	int32_t document_composition_undo_stack_index;
+	int32_t document_composition_undo_state_start;
 	skb_text_t composition_text;
 	int32_t composition_text_offset;				// Global text offset where the composition is displayed.
 	skb_text_position_t composition_selection_base;	// Base position for setting the composition selection.
@@ -121,8 +125,11 @@ typedef struct skb_editor_t {
 
 // fwd decl
 static void skb__reset_undo(skb_editor_t* editor);
+static void skb__undo_clear_last_transaction(skb_editor_t* editor);
 static int32_t skb__capture_undo_text_begin(skb_editor_t* editor, skb_text_range_t text_range, const skb_rich_text_t* rich_text, bool allow_amend_undo);
 static void skb__capture_undo_text_end(skb_editor_t* editor, int32_t transaction_id);
+static void skb__begin_document_composition_undo(skb_editor_t* editor);
+static void skb__end_document_composition_undo(skb_editor_t* editor);
 
 static skb_text_position_t skb__resolve_text_position(const skb_editor_t* editor, skb_text_position_t text_pos)
 {
@@ -1610,6 +1617,47 @@ skb_text_range_t skb_editor_get_composition(const skb_editor_t* editor)
 	return editor->document_composition;
 }
 
+bool skb_editor_commit_composition(skb_editor_t* editor)
+{
+	assert(editor);
+
+	if (!editor->has_document_composition)
+		return false;
+
+	editor->has_document_composition = false;
+	editor->document_composition = (skb_text_range_t){0};
+	skb__end_document_composition_undo(editor);
+	return true;
+}
+
+bool skb_editor_cancel_composition(skb_editor_t* editor, skb_temp_alloc_t* temp_alloc)
+{
+	assert(editor);
+	assert(temp_alloc);
+
+	if (!editor->has_document_composition)
+		return false;
+
+	const bool has_composition_undo = editor->document_composition_undo_open
+		&& editor->document_composition_undo_stack_index >= 0
+		&& editor->undo_stack_head == editor->document_composition_undo_stack_index
+		&& editor->undo_stack[editor->undo_stack_head].states_range.end > editor->document_composition_undo_state_start;
+	skb__end_document_composition_undo(editor);
+
+	if (has_composition_undo) {
+		skb_editor_undo(editor, temp_alloc);
+		// Cancellation is not itself a redoable edit. Drop the transient
+		// composition transaction after restoring its before-state.
+		if (editor->undo_stack_count > 0 && editor->undo_stack_head + 1 < editor->undo_stack_count)
+			skb__undo_clear_last_transaction(editor);
+	} else {
+		editor->has_document_composition = false;
+		editor->document_composition = (skb_text_range_t){0};
+	}
+
+	return true;
+}
+
 void skb_editor_select(skb_editor_t* editor, skb_text_range_t text_range)
 {
 	assert(editor);
@@ -2029,6 +2077,10 @@ bool skb_editor_can_undo(skb_editor_t* editor)
 void skb_editor_undo(skb_editor_t* editor, skb_temp_alloc_t* temp_alloc)
 {
 	assert(editor);
+	if (editor->document_composition_undo_open) {
+		skb_editor_cancel_composition(editor, temp_alloc);
+		return;
+	}
 	if (editor->undo_stack_head >= 0) {
 		skb__editor_undo_transaction_t* undo_transaction = &editor->undo_stack[editor->undo_stack_head];
 
@@ -2073,6 +2125,8 @@ bool skb_editor_can_redo(skb_editor_t* editor)
 void skb_editor_redo(skb_editor_t* editor, skb_temp_alloc_t* temp_alloc)
 {
 	assert(editor);
+	if (editor->document_composition_undo_open)
+		return;
 	if (editor->undo_stack_head + 1 < editor->undo_stack_count) {
 		editor->undo_stack_head++;
 		assert(editor->undo_stack_head < editor->undo_stack_count);
@@ -2653,6 +2707,29 @@ static void skb__set_last_history_kind(skb_editor_t* editor, skb_edit_history_ki
 		editor->undo_stack[editor->undo_stack_head].history_kind = history_kind;
 }
 
+static void skb__begin_document_composition_undo(skb_editor_t* editor)
+{
+	if (editor->document_composition_undo_open)
+		return;
+
+	editor->document_composition_undo_id = skb_editor_undo_transaction_begin(editor);
+	editor->document_composition_undo_open = true;
+	editor->document_composition_undo_stack_index = editor->undo_stack_head;
+	editor->document_composition_undo_state_start = editor->undo_states_count;
+}
+
+static void skb__end_document_composition_undo(skb_editor_t* editor)
+{
+	if (!editor->document_composition_undo_open)
+		return;
+
+	skb_editor_undo_transaction_end(editor, editor->document_composition_undo_id);
+	editor->document_composition_undo_open = false;
+	editor->document_composition_undo_id = 0;
+	editor->document_composition_undo_stack_index = -1;
+	editor->document_composition_undo_state_start = 0;
+}
+
 static void skb__insert_rich_text_internal(
 	skb_editor_t* editor, skb_temp_alloc_t* temp_alloc, skb_text_range_t text_range,
 	const skb_rich_text_t* rich_text, bool allow_amend_undo, bool external,
@@ -2760,6 +2837,10 @@ skb_result_t skb_editor_apply_transaction(skb_editor_t* editor, skb_temp_alloc_t
 			|| !skb__is_valid_transaction_position(transaction->composition_range.end, new_text_count)))
 		return SKB_RESULT_INVALID_RANGE;
 
+	const bool had_document_composition = editor->has_document_composition;
+	if (transaction->has_composition && !had_document_composition)
+		skb__begin_document_composition_undo(editor);
+
 	const skb_rich_text_t* replacement_text = NULL;
 	if (transaction->replacement_text)
 		replacement_text = skb__make_scratch_text_input(editor, temp_alloc, transaction->replacement_text);
@@ -2767,6 +2848,8 @@ skb_result_t skb_editor_apply_transaction(skb_editor_t* editor, skb_temp_alloc_t
 	skb__insert_rich_text_internal(editor, temp_alloc, transaction->replacement,
 		replacement_text, false, true, &transaction->resulting_selection, transaction->history_kind,
 		true, transaction->has_composition, transaction->composition_range);
+	if (!transaction->has_composition && had_document_composition)
+		skb__end_document_composition_undo(editor);
 	return SKB_RESULT_SUCCESS;
 }
 
