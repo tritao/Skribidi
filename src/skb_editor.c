@@ -126,7 +126,7 @@ typedef struct skb_editor_t {
 // fwd decl
 static void skb__reset_undo(skb_editor_t* editor);
 static void skb__undo_clear_last_transaction(skb_editor_t* editor);
-static int32_t skb__capture_undo_text_begin(skb_editor_t* editor, skb_text_range_t text_range, const skb_rich_text_t* rich_text, bool allow_amend_undo);
+static int32_t skb__capture_undo_text_begin(skb_editor_t* editor, skb_text_range_t text_range, const skb_rich_text_t* rich_text, bool allow_amend_undo, skb_edit_history_kind_t history_kind);
 static void skb__capture_undo_text_end(skb_editor_t* editor, int32_t transaction_id);
 static void skb__begin_document_composition_undo(skb_editor_t* editor);
 static void skb__end_document_composition_undo(skb_editor_t* editor);
@@ -1984,7 +1984,7 @@ void skb_editor_process_mouse_drag(skb_editor_t* editor, float x, float y)
 static skb_rich_text_change_t skb__replace_selection(skb_editor_t* editor, const skb_rich_text_t* rich_text, bool allow_amend_undo)
 {
 	// Insert pos gets clamped to the layout text size.
-	int32_t transaction_id = skb__capture_undo_text_begin(editor, editor->selection, rich_text, allow_amend_undo);
+	int32_t transaction_id = skb__capture_undo_text_begin(editor, editor->selection, rich_text, allow_amend_undo, SKB_EDIT_HISTORY_GENERIC);
 
 	skb_rich_text_change_t change = skb_rich_text_insert(&editor->rich_text, editor->selection, rich_text);
 
@@ -2065,28 +2065,63 @@ static void skb__reset_undo(skb_editor_t* editor)
 	editor->undo_stack_head = -1;
 }
 
-static int32_t skb__capture_undo_text_begin(skb_editor_t* editor, skb_text_range_t text_range, const skb_rich_text_t* rich_text, bool allow_amend_undo)
+static int32_t skb__capture_undo_text_begin(skb_editor_t* editor, skb_text_range_t text_range, const skb_rich_text_t* rich_text, bool allow_amend_undo, skb_edit_history_kind_t history_kind)
 {
 	if (editor->params.max_undo_levels < 0)
 		return SKB_INVALID_INDEX;
 
 	const skb_paragraph_range_t range = skb_rich_text_get_paragraph_range_from_text_range(&editor->rich_text, text_range, SKB_AFFINITY_USE);
 
-	// Check if we can amend the last undo state.
-	if (allow_amend_undo && editor->undo_stack_head != -1) {
+	// Check if we can amend the last undo state. Transaction edits use the
+	// explicit history kind so typing and directional deletion can be grouped
+	// without making platform key events part of the document engine.
+	if (editor->in_undo_transaction == 0 && editor->undo_stack_head != -1) {
 		skb__editor_undo_transaction_t* prev_undo_transaction = &editor->undo_stack[editor->undo_stack_head];
-		skb__editor_undo_state_t* prev_undo_state = &editor->undo_states[prev_undo_transaction->states_range.end - 1];
-		if (prev_undo_state->allow_amend_undo) {
+		if (prev_undo_transaction->history_kind == history_kind &&
+			prev_undo_transaction->states_range.end == prev_undo_transaction->states_range.start + 1) {
+			skb__editor_undo_state_t* prev_undo_state = &editor->undo_states[prev_undo_transaction->states_range.end - 1];
 			// Try to amend the previous
 			const bool has_no_remove = range.start.global_text_offset == range.end.global_text_offset;
 			const bool prev_has_insert = prev_undo_state->inserted_range.start.offset < prev_undo_state->inserted_range.end.offset;
 			const bool prev_has_no_remove = prev_undo_state->removed_range.start.offset == prev_undo_state->removed_range.end.offset;
 			const bool caret_at_end_of_prev = range.end.global_text_offset == prev_undo_state->inserted_range.end.offset;
-			if (has_no_remove && prev_has_insert && prev_has_no_remove && caret_at_end_of_prev) {
+			const bool has_no_insert = !rich_text || skb_rich_text_get_utf32_count(rich_text) == 0;
+			const bool current_selection_is_collapsed = editor->selection.start.offset == editor->selection.end.offset;
+			const int32_t removed_count = range.end.global_text_offset - range.start.global_text_offset;
+
+			const bool is_typing_history = history_kind == SKB_EDIT_HISTORY_TYPING ||
+				(history_kind == SKB_EDIT_HISTORY_GENERIC && allow_amend_undo);
+			if (is_typing_history &&
+				has_no_remove && prev_has_insert && prev_has_no_remove && caret_at_end_of_prev &&
+				current_selection_is_collapsed && editor->selection.start.offset == range.start.global_text_offset) {
 				assert(prev_undo_state->inserted_range.end.affinity == SKB_AFFINITY_NONE);
 				skb_rich_text_append(&prev_undo_state->inserted_text, rich_text);
 				prev_undo_state->inserted_range.end.offset += skb_rich_text_get_utf32_count(rich_text);
 				return SKB_INVALID_INDEX;
+			}
+
+			if (has_no_insert && removed_count > 0 && current_selection_is_collapsed &&
+				prev_undo_state->inserted_range.start.offset == prev_undo_state->inserted_range.end.offset &&
+				prev_undo_state->removed_range.start.offset < prev_undo_state->removed_range.end.offset) {
+				if (history_kind == SKB_EDIT_HISTORY_DELETE_BACKWARD &&
+					editor->selection.start.offset == range.end.global_text_offset &&
+					range.end.global_text_offset == prev_undo_state->removed_range.start.offset) {
+					skb_rich_text_insert_range(&prev_undo_state->removed_text,
+						(skb_text_range_t){.start.offset = 0, .end.offset = 0},
+						&editor->rich_text, text_range);
+					prev_undo_state->removed_range.start.offset = range.start.global_text_offset;
+					prev_undo_state->inserted_range.start.offset = range.start.global_text_offset;
+					prev_undo_state->inserted_range.end.offset = range.start.global_text_offset;
+					return SKB_INVALID_INDEX;
+				}
+
+				if (history_kind == SKB_EDIT_HISTORY_DELETE_FORWARD &&
+					editor->selection.start.offset == range.start.global_text_offset &&
+					range.start.global_text_offset == prev_undo_state->removed_range.start.offset) {
+					skb_rich_text_append_range(&prev_undo_state->removed_text, &editor->rich_text, text_range);
+					prev_undo_state->removed_range.end.offset += removed_count;
+					return SKB_INVALID_INDEX;
+				}
 			}
 		}
 	}
@@ -2747,7 +2782,7 @@ void skb_editor_process_key_pressed(skb_editor_t* editor, skb_temp_alloc_t* temp
 				.start = skb__get_backspace_start_offset(editor, editor->selection.end),
 				.end = editor->selection.end,
 			};
-			int32_t transaction_id = skb__capture_undo_text_begin(editor, remove_range, NULL, false);
+			int32_t transaction_id = skb__capture_undo_text_begin(editor, remove_range, NULL, false, SKB_EDIT_HISTORY_GENERIC);
 			skb_rich_text_change_t change = skb_rich_text_remove(&editor->rich_text, remove_range);
 			skb__update_selection_from_change(editor, change);
 			skb__capture_undo_text_end(editor, transaction_id);
@@ -2773,7 +2808,7 @@ void skb_editor_process_key_pressed(skb_editor_t* editor, skb_temp_alloc_t* temp
 				.start = editor->selection.end,
 				.end = skb_rich_text_get_next_grapheme_pos(&editor->rich_text, editor->selection.end),
 			};
-			int32_t transaction_id = skb__capture_undo_text_begin(editor, remove_range, NULL, false);
+			int32_t transaction_id = skb__capture_undo_text_begin(editor, remove_range, NULL, false, SKB_EDIT_HISTORY_GENERIC);
 			skb_rich_text_change_t change = skb_rich_text_remove(&editor->rich_text, remove_range);
 			skb__update_selection_from_change(editor, change);
 			skb__capture_undo_text_end(editor, transaction_id);
@@ -2896,7 +2931,7 @@ static void skb__insert_rich_text_internal(
 		rich_text = rich_text_copy;
 	}
 
-	int32_t transaction_id = skb__capture_undo_text_begin(editor, text_range, rich_text, allow_amend_undo);
+	int32_t transaction_id = skb__capture_undo_text_begin(editor, text_range, rich_text, allow_amend_undo, history_kind);
 	skb__set_last_history_kind(editor, history_kind);
 	skb_rich_text_change_t change = skb_rich_text_insert(&editor->rich_text, text_range, rich_text);
 

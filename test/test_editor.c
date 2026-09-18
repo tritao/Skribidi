@@ -760,6 +760,148 @@ static int test_document_offset_mappings(void)
 	return 0;
 }
 
+static int test_transaction_history_grouping(void)
+{
+	skb_temp_alloc_t* temp_alloc = skb_temp_alloc_create(1024);
+	ENSURE(temp_alloc != NULL);
+
+	skb_font_collection_t* font_collection = skb_font_collection_create();
+	ENSURE(font_collection != NULL);
+	skb_font_handle_t font_handle = skb_font_collection_add_font(font_collection, "data/IBMPlexSans-Regular.ttf", SKB_FONT_FAMILY_DEFAULT, NULL);
+	ENSURE(font_handle);
+
+	skb_attribute_t attributes[] = {
+		skb_attribute_make_font_size(15.f),
+	};
+	skb_editor_params_t params = {
+		.font_collection = font_collection,
+		.caret_mode = SKB_CARET_MODE_SKRIBIDI,
+		.paragraph_attributes = SKB_ATTRIBUTE_SET_FROM_STATIC_ARRAY(attributes),
+	};
+	skb_editor_t* editor = skb_editor_create(&params);
+	ENSURE(editor != NULL);
+	skb_text_t* replacement_text = skb_text_create();
+	ENSURE(replacement_text != NULL);
+	char text[64] = {0};
+
+	skb_edit_transaction_t transaction = {
+		.replacement = {.start = {.offset = 0}, .end = {.offset = 0}},
+		.replacement_text = replacement_text,
+		.resulting_selection = {
+			.anchor = {.offset = 1, .affinity = SKB_AFFINITY_TRAILING},
+			.focus = {.offset = 1, .affinity = SKB_AFFINITY_TRAILING},
+		},
+		.history_kind = SKB_EDIT_HISTORY_TYPING,
+	};
+
+	// Continuous typing is one undo unit.
+	skb_editor_set_text_utf8(editor, temp_alloc, "", -1);
+	skb_text_append_utf8(replacement_text, "a", 1, (skb_attribute_set_t){0});
+	ENSURE(skb_editor_apply_transaction(editor, temp_alloc, &transaction) == SKB_RESULT_SUCCESS);
+	skb_text_reset(replacement_text);
+	skb_text_append_utf8(replacement_text, "b", 1, (skb_attribute_set_t){0});
+	transaction.replacement.start.offset = 1;
+	transaction.replacement.end.offset = 1;
+	transaction.resulting_selection.anchor.offset = 2;
+	transaction.resulting_selection.focus.offset = 2;
+	ENSURE(skb_editor_apply_transaction(editor, temp_alloc, &transaction) == SKB_RESULT_SUCCESS);
+	skb_editor_get_text_utf8(editor, text, (int32_t)sizeof(text));
+	ENSURE(strcmp(text, "ab") == 0);
+	skb_editor_undo(editor, temp_alloc);
+	memset(text, 0, sizeof(text));
+	skb_editor_get_text_utf8(editor, text, (int32_t)sizeof(text));
+	ENSURE(strcmp(text, "") == 0);
+	skb_editor_redo(editor, temp_alloc);
+	memset(text, 0, sizeof(text));
+	skb_editor_get_text_utf8(editor, text, (int32_t)sizeof(text));
+	ENSURE(strcmp(text, "ab") == 0);
+
+	// Consecutive backward deletion is one undo unit.
+	skb_editor_set_text_utf8(editor, temp_alloc, "abc", -1);
+	skb_text_reset(replacement_text);
+	transaction.replacement = (skb_text_range_t){.start = {.offset = 2}, .end = {.offset = 3}};
+	transaction.resulting_selection = (skb_selection_t){
+		.anchor = {.offset = 2, .affinity = SKB_AFFINITY_TRAILING},
+		.focus = {.offset = 2, .affinity = SKB_AFFINITY_TRAILING},
+	};
+	transaction.history_kind = SKB_EDIT_HISTORY_DELETE_BACKWARD;
+	ENSURE(skb_editor_apply_transaction(editor, temp_alloc, &transaction) == SKB_RESULT_SUCCESS);
+	transaction.replacement = (skb_text_range_t){.start = {.offset = 1}, .end = {.offset = 2}};
+	transaction.resulting_selection.anchor.offset = 1;
+	transaction.resulting_selection.focus.offset = 1;
+	ENSURE(skb_editor_apply_transaction(editor, temp_alloc, &transaction) == SKB_RESULT_SUCCESS);
+	memset(text, 0, sizeof(text));
+	skb_editor_get_text_utf8(editor, text, (int32_t)sizeof(text));
+	ENSURE(strcmp(text, "a") == 0);
+	skb_editor_undo(editor, temp_alloc);
+	memset(text, 0, sizeof(text));
+	skb_editor_get_text_utf8(editor, text, (int32_t)sizeof(text));
+	ENSURE(strcmp(text, "abc") == 0);
+	skb_editor_redo(editor, temp_alloc);
+	memset(text, 0, sizeof(text));
+	skb_editor_get_text_utf8(editor, text, (int32_t)sizeof(text));
+	ENSURE(strcmp(text, "a") == 0);
+
+	// Consecutive forward deletion is one undo unit.
+	skb_editor_set_text_utf8(editor, temp_alloc, "abc", -1);
+	skb_editor_set_selection(editor, (skb_selection_t){
+		.anchor = {.offset = 0, .affinity = SKB_AFFINITY_TRAILING},
+		.focus = {.offset = 0, .affinity = SKB_AFFINITY_TRAILING},
+	});
+	transaction.replacement = (skb_text_range_t){.start = {.offset = 0}, .end = {.offset = 1}};
+	transaction.resulting_selection = (skb_selection_t){
+		.anchor = {.offset = 0, .affinity = SKB_AFFINITY_TRAILING},
+		.focus = {.offset = 0, .affinity = SKB_AFFINITY_TRAILING},
+	};
+	transaction.history_kind = SKB_EDIT_HISTORY_DELETE_FORWARD;
+	ENSURE(skb_editor_apply_transaction(editor, temp_alloc, &transaction) == SKB_RESULT_SUCCESS);
+	ENSURE(skb_editor_apply_transaction(editor, temp_alloc, &transaction) == SKB_RESULT_SUCCESS);
+	memset(text, 0, sizeof(text));
+	skb_editor_get_text_utf8(editor, text, (int32_t)sizeof(text));
+	ENSURE(strcmp(text, "c") == 0);
+	skb_editor_undo(editor, temp_alloc);
+	memset(text, 0, sizeof(text));
+	skb_editor_get_text_utf8(editor, text, (int32_t)sizeof(text));
+	ENSURE(strcmp(text, "abc") == 0);
+	skb_editor_redo(editor, temp_alloc);
+	memset(text, 0, sizeof(text));
+	skb_editor_get_text_utf8(editor, text, (int32_t)sizeof(text));
+	ENSURE(strcmp(text, "c") == 0);
+
+	// Autocorrect remains separate from the following typing transaction.
+	skb_editor_set_text_utf8(editor, temp_alloc, "teh", -1);
+	skb_text_reset(replacement_text);
+	skb_text_append_utf8(replacement_text, "the", 3, (skb_attribute_set_t){0});
+	transaction.replacement = (skb_text_range_t){.start = {.offset = 0}, .end = {.offset = 3}};
+	transaction.resulting_selection = (skb_selection_t){
+		.anchor = {.offset = 3, .affinity = SKB_AFFINITY_TRAILING},
+		.focus = {.offset = 3, .affinity = SKB_AFFINITY_TRAILING},
+	};
+	transaction.history_kind = SKB_EDIT_HISTORY_AUTOCORRECT;
+	ENSURE(skb_editor_apply_transaction(editor, temp_alloc, &transaction) == SKB_RESULT_SUCCESS);
+	skb_text_reset(replacement_text);
+	skb_text_append_utf8(replacement_text, "!", 1, (skb_attribute_set_t){0});
+	transaction.replacement = (skb_text_range_t){.start = {.offset = 3}, .end = {.offset = 3}};
+	transaction.resulting_selection.anchor.offset = 4;
+	transaction.resulting_selection.focus.offset = 4;
+	transaction.history_kind = SKB_EDIT_HISTORY_TYPING;
+	ENSURE(skb_editor_apply_transaction(editor, temp_alloc, &transaction) == SKB_RESULT_SUCCESS);
+	skb_editor_undo(editor, temp_alloc);
+	memset(text, 0, sizeof(text));
+	skb_editor_get_text_utf8(editor, text, (int32_t)sizeof(text));
+	ENSURE(strcmp(text, "the") == 0);
+	skb_editor_undo(editor, temp_alloc);
+	memset(text, 0, sizeof(text));
+	skb_editor_get_text_utf8(editor, text, (int32_t)sizeof(text));
+	ENSURE(strcmp(text, "teh") == 0);
+
+	skb_text_destroy(replacement_text);
+	skb_editor_destroy(editor);
+	skb_font_collection_destroy(font_collection);
+	skb_temp_alloc_destroy(temp_alloc);
+	return 0;
+}
+
 int editor_tests(void)
 {
 	RUN_SUBTEST(test_init);
@@ -769,6 +911,7 @@ int editor_tests(void)
 	RUN_SUBTEST(test_option_word_navigation_macos);
 	RUN_SUBTEST(test_word_start_at_document_start);
 	RUN_SUBTEST(test_edit_transaction);
+	RUN_SUBTEST(test_transaction_history_grouping);
 	RUN_SUBTEST(test_document_offset_mappings);
 	return 0;
 }
