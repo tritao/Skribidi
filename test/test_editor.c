@@ -644,6 +644,11 @@ static int test_edit_transaction(void)
 	skb_editor_get_text_utf8(editor, text, (int32_t)sizeof(text));
 	ENSURE(strcmp(text, "h日ilo") == 0);
 
+	// External reset must discard the active composition transaction too.
+	skb_editor_set_text_utf8(editor, temp_alloc, "reset", -1);
+	ENSURE(!skb_editor_has_composition(editor));
+	ENSURE(!skb_editor_can_undo(editor));
+
 	skb_text_destroy(replacement_text);
 	skb_editor_destroy(editor);
 	skb_font_collection_destroy(font_collection);

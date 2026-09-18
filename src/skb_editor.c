@@ -597,6 +597,13 @@ void skb_editor_reset(skb_editor_t* editor, const skb_editor_params_t* params)
 	editor->active_attributes_count = 0;
 	editor->preferred_x = -1.f;
 	editor->undo_stack_head = -1;
+	editor->has_document_composition = false;
+	editor->document_composition = (skb_text_range_t){0};
+	editor->document_composition_undo_open = false;
+	editor->document_composition_undo_id = 0;
+	editor->document_composition_undo_stack_index = -1;
+	editor->document_composition_undo_state_start = 0;
+	editor->in_undo_transaction = 0;
 
 	const skb_text_position_t start_pos = { .offset = 0, .affinity = SKB_AFFINITY_SOL };
 	editor->selection = (skb_text_range_t) { .start = start_pos, .end = start_pos };
