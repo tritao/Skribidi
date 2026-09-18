@@ -34,6 +34,18 @@ extern "C" {
 	#define SKB_API
 #endif
 
+/** Result returned by APIs which validate caller-provided editor data. */
+typedef enum skb_result_t {
+	/** The operation completed successfully. */
+	SKB_RESULT_SUCCESS = 0,
+	/** A required pointer or value was not provided. */
+	SKB_RESULT_INVALID_ARGUMENT,
+	/** A text position or range is outside the document. */
+	SKB_RESULT_INVALID_RANGE,
+	/** The requested operation is not a valid editor transaction. */
+	SKB_RESULT_INVALID_TRANSACTION,
+} skb_result_t;
+
 /**
  * @defgroup common Common
  * Common functionality used across the different features.

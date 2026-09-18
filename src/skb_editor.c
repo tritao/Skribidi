@@ -47,6 +47,7 @@ typedef struct skb__editor_undo_transaction_t {
 	skb_range_t states_range;		// Removed text range before replace.
 	skb_text_range_t selection_before;	// Selection before the change.
 	skb_text_range_t selection_after;	// Selection after at the change (at the point of undo).
+	skb_edit_history_kind_t history_kind;
 } skb__editor_undo_transaction_t;
 
 typedef struct skb_editor_t {
@@ -146,6 +147,22 @@ static void skb__update_selection_from_change(skb_editor_t* editor, skb_rich_tex
 		editor->selection.end = change.edit_end_position;
 		editor->preferred_x = -1.f; // reset preferred.
 	}
+}
+
+static skb_text_range_t skb__selection_to_text_range(skb_selection_t selection)
+{
+	return (skb_text_range_t) {
+		.start = selection.anchor,
+		.end = selection.focus,
+	};
+}
+
+static skb_selection_t skb__text_range_to_selection(skb_text_range_t text_range)
+{
+	return (skb_selection_t) {
+		.anchor = text_range.start,
+		.focus = text_range.end,
+	};
 }
 
 static void skb__editor_clamp_view_offset(skb_editor_t* editor)
@@ -1569,11 +1586,23 @@ skb_text_range_t skb_editor_get_current_selection(const skb_editor_t* editor)
 	return editor->selection;
 }
 
+skb_selection_t skb_editor_get_selection(const skb_editor_t* editor)
+{
+	assert(editor);
+	return skb__text_range_to_selection(skb_editor_get_current_selection(editor));
+}
+
 void skb_editor_select(skb_editor_t* editor, skb_text_range_t text_range)
 {
 	assert(editor);
 	editor->selection = text_range;
 	skb__emit_on_selection_change(editor, SKB_EDITOR_SELECTION_EXTERNAL);
+}
+
+void skb_editor_set_selection(skb_editor_t* editor, skb_selection_t selection)
+{
+	assert(editor);
+	skb_editor_select(editor, skb__selection_to_text_range(selection));
 }
 
 void skb_editor_select_all(skb_editor_t* editor)
@@ -2592,9 +2621,16 @@ static skb_text_range_t skb__adjust_text_selection(const skb_editor_t* editor, s
 	};
 }
 
-static void skb__insert_rich_text(
+static void skb__set_last_history_kind(skb_editor_t* editor, skb_edit_history_kind_t history_kind)
+{
+	if (editor->undo_stack_head >= 0)
+		editor->undo_stack[editor->undo_stack_head].history_kind = history_kind;
+}
+
+static void skb__insert_rich_text_internal(
 	skb_editor_t* editor, skb_temp_alloc_t* temp_alloc, skb_text_range_t text_range,
-	const skb_rich_text_t* rich_text, bool allow_amend_undo, bool external)
+	const skb_rich_text_t* rich_text, bool allow_amend_undo, bool external,
+	const skb_selection_t* resulting_selection, skb_edit_history_kind_t history_kind)
 {
 	const bool is_current_selection = skb_text_range_is_current_selection(text_range);
 	text_range = skb__resolve_text_range(editor, text_range);
@@ -2606,11 +2642,12 @@ static void skb__insert_rich_text(
 			skb_rich_text_append(rich_text_copy, rich_text);
 		}
 
-		editor->input_filter_callback(editor, rich_text_copy, editor->selection, editor->input_filter_context);
+		editor->input_filter_callback(editor, rich_text_copy, text_range, editor->input_filter_context);
 		rich_text = rich_text_copy;
 	}
 
 	int32_t transaction_id = skb__capture_undo_text_begin(editor, text_range, rich_text, allow_amend_undo);
+	skb__set_last_history_kind(editor, history_kind);
 	skb_rich_text_change_t change = skb_rich_text_insert(&editor->rich_text, text_range, rich_text);
 
 	if (is_current_selection) {
@@ -2620,6 +2657,8 @@ static void skb__insert_rich_text(
 		const int32_t inserted_text_length = skb_rich_text_get_utf32_count(rich_text);
 		editor->selection = skb__adjust_text_selection(editor, editor->selection, text_range, inserted_text_length);
 	}
+	if (resulting_selection)
+		editor->selection = skb__selection_to_text_range(*resulting_selection);
 
 	skb__capture_undo_text_end(editor, transaction_id);
 
@@ -2628,6 +2667,69 @@ static void skb__insert_rich_text(
 	skb__emit_on_text_change(editor, external ? SKB_EDITOR_TEXT_EXTERNAL : SKB_EDITOR_TEXT_EDIT);
 	skb__emit_on_selection_change(editor, SKB_EDITOR_SELECTION_EDIT);
 	skb__ensure_caret_visible(editor);
+}
+
+static void skb__insert_rich_text(
+	skb_editor_t* editor, skb_temp_alloc_t* temp_alloc, skb_text_range_t text_range,
+	const skb_rich_text_t* rich_text, bool allow_amend_undo, bool external)
+{
+	skb__insert_rich_text_internal(editor, temp_alloc, text_range, rich_text,
+		allow_amend_undo, external, NULL, SKB_EDIT_HISTORY_GENERIC);
+}
+
+static skb_rich_text_t* skb__make_scratch_text_input(skb_editor_t* editor, skb_temp_alloc_t* temp_alloc, const skb_text_t* text)
+{
+	skb_rich_text_reset(&editor->scratch_rich_text);
+
+	skb_attribute_set_t paragraph_attributes = {0};
+	if (skb__get_paragraph_count(editor) > 0)
+		paragraph_attributes = skb__get_paragraph_attributes(editor, editor->active_attribute_paragraph_idx);
+	else
+		paragraph_attributes = editor->params.paragraph_attributes;
+
+	skb_rich_text_append_paragraph(&editor->scratch_rich_text, paragraph_attributes);
+	if (text)
+		skb_rich_text_append_text(&editor->scratch_rich_text, temp_alloc, text);
+
+	return &editor->scratch_rich_text;
+}
+
+static bool skb__is_valid_transaction_position(skb_text_position_t position, int32_t text_count)
+{
+	return position.offset >= 0 && position.offset <= text_count
+		&& position.affinity >= SKB_AFFINITY_NONE && position.affinity <= SKB_AFFINITY_EOL;
+}
+
+skb_result_t skb_editor_apply_transaction(skb_editor_t* editor, skb_temp_alloc_t* temp_alloc, const skb_edit_transaction_t* transaction)
+{
+	if (!editor || !temp_alloc || !transaction)
+		return SKB_RESULT_INVALID_ARGUMENT;
+
+	if (transaction->history_kind < SKB_EDIT_HISTORY_GENERIC || transaction->history_kind > SKB_EDIT_HISTORY_COMPOSITION)
+		return SKB_RESULT_INVALID_TRANSACTION;
+
+	const int32_t old_text_count = skb_rich_text_get_utf32_count(&editor->rich_text);
+	const bool is_current_selection = skb_text_range_is_current_selection(transaction->replacement);
+	const skb_text_range_t replacement = skb__resolve_text_range(editor, transaction->replacement);
+	if (!is_current_selection
+		&& (!skb__is_valid_transaction_position(replacement.start, old_text_count)
+			|| !skb__is_valid_transaction_position(replacement.end, old_text_count)))
+		return SKB_RESULT_INVALID_RANGE;
+
+	const skb_range_t replacement_offsets = skb_rich_text_get_offset_range_from_text_range(&editor->rich_text, replacement);
+	const int32_t replacement_count = transaction->replacement_text ? skb_text_get_utf32_count(transaction->replacement_text) : 0;
+	const int32_t new_text_count = old_text_count - (replacement_offsets.end - replacement_offsets.start) + replacement_count;
+	if (!skb__is_valid_transaction_position(transaction->resulting_selection.anchor, new_text_count)
+		|| !skb__is_valid_transaction_position(transaction->resulting_selection.focus, new_text_count))
+		return SKB_RESULT_INVALID_RANGE;
+
+	const skb_rich_text_t* replacement_text = NULL;
+	if (transaction->replacement_text)
+		replacement_text = skb__make_scratch_text_input(editor, temp_alloc, transaction->replacement_text);
+
+	skb__insert_rich_text_internal(editor, temp_alloc, transaction->replacement,
+		replacement_text, false, true, &transaction->resulting_selection, transaction->history_kind);
+	return SKB_RESULT_SUCCESS;
 }
 
 

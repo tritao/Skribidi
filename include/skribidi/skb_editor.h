@@ -34,6 +34,47 @@ extern "C" {
 typedef struct skb_rich_text_t skb_rich_text_t;
 typedef struct skb_rich_layout_t skb_rich_layout_t;
 
+/**
+ * A directional selection. The anchor remains fixed while the focus moves,
+ * which preserves selection direction for bidi editing and Shift navigation.
+ */
+typedef struct skb_selection_t {
+	/** Position where the selection started. */
+	skb_text_position_t anchor;
+	/** Position where the selection currently ends. */
+	skb_text_position_t focus;
+} skb_selection_t;
+
+/** The semantic reason an edit should be grouped in editor history. */
+typedef enum skb_edit_history_kind_t {
+	SKB_EDIT_HISTORY_GENERIC = 0,
+	SKB_EDIT_HISTORY_TYPING,
+	SKB_EDIT_HISTORY_DELETE_BACKWARD,
+	SKB_EDIT_HISTORY_DELETE_FORWARD,
+	SKB_EDIT_HISTORY_PASTE,
+	SKB_EDIT_HISTORY_AUTOCORRECT,
+	SKB_EDIT_HISTORY_COMPOSITION,
+} skb_edit_history_kind_t;
+
+/**
+ * Atomic document edit. The replacement text is read during the call and is
+ * not retained by the editor. A NULL replacement_text removes the range.
+ *
+ * The replacement range is interpreted as an ordered range; its endpoints may
+ * be supplied in either direction. The resulting selection is expressed as a
+ * directional anchor/focus pair in the document after the replacement.
+ */
+typedef struct skb_edit_transaction_t {
+	/** Range to replace, or SKB_CURRENT_SELECTION. */
+	skb_text_range_t replacement;
+	/** Text to insert, or NULL to remove the replacement range. */
+	const skb_text_t* replacement_text;
+	/** Selection after the replacement has been applied. */
+	skb_selection_t resulting_selection;
+	/** History grouping hint for this edit. */
+	skb_edit_history_kind_t history_kind;
+} skb_edit_transaction_t;
+
 /** Opaque type for the text editor. Use skb_editor_create() to create. */
 typedef struct skb_editor_t skb_editor_t;
 
@@ -462,12 +503,18 @@ SKB_API int32_t skb_editor_get_text_range_count(const skb_editor_t* editor, skb_
 /** @return current selection of the editor. */
 SKB_API skb_text_range_t skb_editor_get_current_selection(const skb_editor_t* editor);
 
+/** @return current directional selection of the editor. */
+SKB_API skb_selection_t skb_editor_get_selection(const skb_editor_t* editor);
+
 /**
  * Sets the current selection of the editor to specific range.
  * @param editor editor to change.
  * @param text_range new selection.
  */
 SKB_API void skb_editor_select(skb_editor_t* editor, skb_text_range_t text_range);
+
+/** Sets the current directional selection of the editor. */
+SKB_API void skb_editor_set_selection(skb_editor_t* editor, skb_selection_t selection);
 
 /**
  * Sets the current selection of the editor to all the text.
@@ -573,6 +620,20 @@ SKB_API void skb_editor_clear_composition(skb_editor_t* editor, skb_temp_alloc_t
 //
 // Text edit
 //
+
+/**
+ * Applies one atomic replacement and selection update.
+ *
+ * This is the canonical mutation path for integrations. Existing insertion
+ * and removal functions remain as compatibility conveniences and are layered
+ * on the same internal operation.
+ *
+ * @param editor editor to update.
+ * @param temp_alloc temporary allocator used for text modifications/layout.
+ * @param transaction transaction to apply; its input memory is not retained.
+ * @return SKB_RESULT_SUCCESS if the transaction was applied.
+ */
+SKB_API skb_result_t skb_editor_apply_transaction(skb_editor_t* editor, skb_temp_alloc_t* temp_alloc, const skb_edit_transaction_t* transaction);
 
 /**
  * Inserts new paragraph replacing the text range. This is equivalent of pressing enter at the current caret position.

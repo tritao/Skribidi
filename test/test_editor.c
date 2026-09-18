@@ -5,6 +5,19 @@
 #include "test_macros.h"
 #include "skribidi/skb_editor.h"
 #include "skribidi/skb_font_collection.h"
+#include "skribidi/skb_text.h"
+
+typedef struct edit_callback_state_t {
+	int text_change_count;
+} edit_callback_state_t;
+
+static void on_edit_text_change(skb_editor_t* editor, skb_editor_text_change_reason_t reason, void* context)
+{
+	SKB_UNUSED(editor);
+	SKB_UNUSED(reason);
+	edit_callback_state_t* state = context;
+	state->text_change_count++;
+}
 
 static int test_init(void)
 {
@@ -424,6 +437,126 @@ static int test_word_start_at_document_start(void)
 	return 0;
 }
 
+static int test_edit_transaction(void)
+{
+	skb_temp_alloc_t* temp_alloc = skb_temp_alloc_create(1024);
+	ENSURE(temp_alloc != NULL);
+
+	skb_font_collection_t* font_collection = skb_font_collection_create();
+	ENSURE(font_collection != NULL);
+	skb_font_handle_t font_handle = skb_font_collection_add_font(font_collection, "data/IBMPlexSans-Regular.ttf", SKB_FONT_FAMILY_DEFAULT, NULL);
+	ENSURE(font_handle);
+
+	skb_attribute_t attributes[] = {
+		skb_attribute_make_font_size(15.f),
+	};
+	skb_editor_params_t params = {
+		.font_collection = font_collection,
+		.caret_mode = SKB_CARET_MODE_SKRIBIDI,
+		.paragraph_attributes = SKB_ATTRIBUTE_SET_FROM_STATIC_ARRAY(attributes),
+	};
+
+	skb_editor_t* editor = skb_editor_create(&params);
+	ENSURE(editor != NULL);
+	skb_editor_set_text_utf8(editor, temp_alloc, "hello", -1);
+
+	edit_callback_state_t callback_state = {0};
+	skb_editor_set_on_text_change_callback(editor, on_edit_text_change, &callback_state);
+
+	skb_text_t* replacement_text = skb_text_create();
+	ENSURE(replacement_text != NULL);
+	skb_text_append_utf8(replacement_text, "i", 1, (skb_attribute_set_t){0});
+
+	skb_edit_transaction_t transaction = {
+		.replacement = {
+			.start = {.offset = 1, .affinity = SKB_AFFINITY_TRAILING},
+			.end = {.offset = 3, .affinity = SKB_AFFINITY_TRAILING},
+		},
+		.replacement_text = replacement_text,
+		.resulting_selection = {
+			.anchor = {.offset = 2, .affinity = SKB_AFFINITY_TRAILING},
+			.focus = {.offset = 2, .affinity = SKB_AFFINITY_TRAILING},
+		},
+		.history_kind = SKB_EDIT_HISTORY_TYPING,
+	};
+	ENSURE(skb_editor_apply_transaction(editor, temp_alloc, &transaction) == SKB_RESULT_SUCCESS);
+	ENSURE(callback_state.text_change_count == 1);
+
+	char text[32] = {0};
+	skb_editor_get_text_utf8(editor, text, (int32_t)sizeof(text));
+	ENSURE(strcmp(text, "hilo") == 0);
+	skb_selection_t selection = skb_editor_get_selection(editor);
+	ENSURE(selection.anchor.offset == 2 && selection.focus.offset == 2);
+
+	// Direction must survive the new API, including when the legacy range
+	// representation is used by the existing editor implementation.
+	skb_editor_set_selection(editor, (skb_selection_t){
+		.anchor = {.offset = 3, .affinity = SKB_AFFINITY_TRAILING},
+		.focus = {.offset = 1, .affinity = SKB_AFFINITY_TRAILING},
+	});
+	selection = skb_editor_get_selection(editor);
+	ENSURE(selection.anchor.offset == 3 && selection.focus.offset == 1);
+
+	skb_text_reset(replacement_text);
+	skb_text_append_utf8(replacement_text, "X", 1, (skb_attribute_set_t){0});
+	transaction.replacement = SKB_CURRENT_SELECTION;
+	transaction.replacement_text = replacement_text;
+	transaction.resulting_selection = (skb_selection_t){
+		.anchor = {.offset = 2, .affinity = SKB_AFFINITY_TRAILING},
+		.focus = {.offset = 2, .affinity = SKB_AFFINITY_TRAILING},
+	};
+	transaction.history_kind = SKB_EDIT_HISTORY_PASTE;
+	ENSURE(skb_editor_apply_transaction(editor, temp_alloc, &transaction) == SKB_RESULT_SUCCESS);
+	memset(text, 0, sizeof(text));
+	skb_editor_get_text_utf8(editor, text, (int32_t)sizeof(text));
+	ENSURE(strcmp(text, "hXo") == 0);
+	ENSURE(skb_editor_get_selection(editor).anchor.offset == 2);
+
+	skb_temp_alloc_reset(temp_alloc);
+	skb_editor_undo(editor, temp_alloc);
+	memset(text, 0, sizeof(text));
+	skb_editor_get_text_utf8(editor, text, (int32_t)sizeof(text));
+	ENSURE(strcmp(text, "hilo") == 0);
+	selection = skb_editor_get_selection(editor);
+	ENSURE(selection.anchor.offset == 3 && selection.focus.offset == 1);
+
+	transaction.replacement = (skb_text_range_t){
+		.start = {.offset = 1, .affinity = SKB_AFFINITY_TRAILING},
+		.end = {.offset = 2, .affinity = SKB_AFFINITY_TRAILING},
+	};
+	transaction.replacement_text = NULL;
+	transaction.resulting_selection = (skb_selection_t){
+		.anchor = {.offset = 1, .affinity = SKB_AFFINITY_TRAILING},
+		.focus = {.offset = 1, .affinity = SKB_AFFINITY_TRAILING},
+	};
+	transaction.history_kind = SKB_EDIT_HISTORY_DELETE_BACKWARD;
+	ENSURE(skb_editor_apply_transaction(editor, temp_alloc, &transaction) == SKB_RESULT_SUCCESS);
+	memset(text, 0, sizeof(text));
+	skb_editor_get_text_utf8(editor, text, (int32_t)sizeof(text));
+	ENSURE(strcmp(text, "hlo") == 0);
+
+	skb_temp_alloc_reset(temp_alloc);
+	skb_editor_undo(editor, temp_alloc);
+	memset(text, 0, sizeof(text));
+	skb_editor_get_text_utf8(editor, text, (int32_t)sizeof(text));
+	ENSURE(strcmp(text, "hilo") == 0);
+
+	transaction.replacement = (skb_text_range_t){
+		.start = {.offset = 100, .affinity = SKB_AFFINITY_TRAILING},
+		.end = {.offset = 100, .affinity = SKB_AFFINITY_TRAILING},
+	};
+	ENSURE(skb_editor_apply_transaction(editor, temp_alloc, &transaction) == SKB_RESULT_INVALID_RANGE);
+	memset(text, 0, sizeof(text));
+	skb_editor_get_text_utf8(editor, text, (int32_t)sizeof(text));
+	ENSURE(strcmp(text, "hilo") == 0);
+
+	skb_text_destroy(replacement_text);
+	skb_editor_destroy(editor);
+	skb_font_collection_destroy(font_collection);
+	skb_temp_alloc_destroy(temp_alloc);
+	return 0;
+}
+
 int editor_tests(void)
 {
 	RUN_SUBTEST(test_init);
@@ -432,5 +565,6 @@ int editor_tests(void)
 	RUN_SUBTEST(test_shift_command_text_selection_macos);
 	RUN_SUBTEST(test_option_word_navigation_macos);
 	RUN_SUBTEST(test_word_start_at_document_start);
+	RUN_SUBTEST(test_edit_transaction);
 	return 0;
 }
