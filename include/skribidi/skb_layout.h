@@ -577,6 +577,16 @@ SKB_API void skb_layout_set_utf8(
 	skb_layout_t* layout, skb_temp_alloc_t* temp_alloc, const skb_layout_params_t* params,
 	const char* text, int32_t text_count, skb_attribute_set_t attributes);
 
+/** Reuses shaped glyphs around a small edit in a single-run lowercase Latin
+ * layout, then recomputes lines and all geometry in one layout generation.
+ * Returns false without changing layout when the edit or shaping seam is not
+ * supported. Callers should rebuild normally in that case. Offsets count
+ * Unicode codepoints; replacement_count is UTF-8 bytes or -1 for a C string.
+ */
+SKB_API bool skb_layout_try_edit_ascii(
+	skb_layout_t* layout, skb_temp_alloc_t* temp_alloc, int32_t start, int32_t end,
+	const char* replacement, int32_t replacement_count);
+
 /**
  * Sets the layout from the provided parameters, text and text attributes.
  * @param layout layout to set up

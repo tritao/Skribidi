@@ -3204,6 +3204,189 @@ void skb_layout_set_from_runs(skb_layout_t* layout, skb_temp_alloc_t* temp_alloc
 	SKB_TEMP_FREE(build_context.temp_alloc, text_counts);
 }
 
+static bool skb__one_ascii_glyph_per_codepoint(const skb_layout_t* layout)
+{
+	if (layout->content_runs_count != 1 || layout->shaping_runs_count != 1 ||
+		layout->resolved_direction != SKB_DIRECTION_LTR ||
+		layout->clusters_count != layout->text_count || layout->glyphs_count != layout->text_count)
+		return false;
+	const skb__content_run_t* content = &layout->content_runs[0];
+	const skb__shaping_run_t* run = &layout->shaping_runs[0];
+	if ((content->type != SKB_CONTENT_RUN_UTF8 && content->type != SKB_CONTENT_RUN_UTF32) ||
+		content->text_range.start != 0 || content->text_range.end != layout->text_count ||
+		run->text_range.start != 0 || run->text_range.end != layout->text_count ||
+		run->cluster_range.start != 0 || run->cluster_range.end != layout->text_count ||
+		run->glyph_range.start != 0 || run->glyph_range.end != layout->text_count ||
+		run->direction != SKB_DIRECTION_LTR || run->is_emoji ||
+		run->has_baseline_shift || layout->lines_count <= 0)
+		return false;
+	int32_t expected = 0;
+	for (int32_t row = 0; row < layout->lines_count; ++row) {
+		const skb_layout_line_t* line = &layout->lines[row];
+		if (line->text_range.start != expected || line->text_range.end < expected ||
+			line->text_range.end > layout->text_count)
+			return false;
+		float x = line->bounds.x;
+		for (int32_t i = expected; i < line->text_range.end; ++i) {
+			const skb_cluster_t* cluster = &layout->clusters[i];
+			const skb_glyph_t* glyph = &layout->glyphs[i];
+			if (layout->text[i] < 'a' || layout->text[i] > 'z' ||
+				cluster->text_offset != i || cluster->text_count != 1 ||
+				cluster->glyphs_offset != i || cluster->glyphs_count != 1 ||
+				glyph->cluster_idx != i || fabsf(glyph->offset_x - x) > 0.001f ||
+				fabsf(glyph->offset_y - line->baseline) > 0.001f)
+				return false;
+			x += glyph->advance_x;
+		}
+		expected = line->text_range.end;
+	}
+	return expected == layout->text_count;
+}
+
+static bool skb__same_ascii_seam(const skb_layout_t* old, int32_t old_index,
+	const skb_layout_t* window, int32_t window_index)
+{
+	const skb_glyph_t* a = &old->glyphs[old_index];
+	const skb_glyph_t* b = &window->glyphs[window_index];
+	const skb_text_property_t* pa = &old->text_props[old_index];
+	const skb_text_property_t* pb = &window->text_props[window_index];
+	return old->text[old_index] == window->text[window_index] &&
+		a->gid == b->gid && fabsf(a->advance_x - b->advance_x) < 0.001f &&
+		pa->flags == pb->flags && pa->script == pb->script;
+}
+
+bool skb_layout_try_edit_ascii(skb_layout_t* layout, skb_temp_alloc_t* temp_alloc,
+	int32_t start, int32_t end, const char* replacement, int32_t replacement_count)
+{
+	if (!layout || !temp_alloc || !replacement || start < 0 || end < start ||
+		end > layout->text_count || !skb__one_ascii_glyph_per_codepoint(layout))
+		return false;
+	if (replacement_count < 0)
+		replacement_count = (int32_t)strlen(replacement);
+	if (replacement_count < 0 || replacement_count > 8 ||
+		layout->text_count > INT32_MAX - replacement_count)
+		return false;
+	for (int32_t i = 0; i < replacement_count; ++i)
+		if (replacement[i] < 'a' || replacement[i] > 'z')
+			return false;
+
+	const int32_t context_start = start > 16 ? start - 16 : 0;
+	const int32_t context_end = end <= layout->text_count - 16 ? end + 16 : layout->text_count;
+	const int32_t delta = replacement_count - (end - start);
+	const int32_t window_count = context_end - context_start + delta;
+	const int32_t new_count = layout->text_count + delta;
+	if (window_count <= 0 || new_count <= 0)
+		return false;
+	uint32_t* window_text = skb_malloc((size_t)window_count * sizeof(uint32_t));
+	for (int32_t i = context_start; i < start; ++i)
+		window_text[i - context_start] = layout->text[i];
+	for (int32_t i = 0; i < replacement_count; ++i)
+		window_text[start - context_start + i] = (uint8_t)replacement[i];
+	for (int32_t i = end; i < context_end; ++i)
+		window_text[i - context_start + delta] = layout->text[i];
+
+	const skb__content_run_t* content = &layout->content_runs[0];
+	const skb_attribute_set_t text_attributes = {
+		.attributes = content->attributes_range.end > content->attributes_range.start
+			? layout->attributes + content->attributes_range.start : NULL,
+		.attributes_count = content->attributes_range.end - content->attributes_range.start,
+	};
+	skb_layout_t* window = skb_layout_create_utf32(temp_alloc, &layout->params,
+		window_text, window_count, text_attributes);
+	skb_free(window_text);
+	if (!window || !skb__one_ascii_glyph_per_codepoint(window) ||
+		window->shaping_runs[0].font_handle != layout->shaping_runs[0].font_handle) {
+		skb_layout_destroy(window);
+		return false;
+	}
+	// The local end is an artificial end of input when unchanged text follows.
+	if (context_end < layout->text_count)
+		window->text_props[window_count - 1] = layout->text_props[context_end - 1];
+	const int32_t left_guard = start - context_start < 4 ? start - context_start : 4;
+	const int32_t right_guard = context_end - end < 4 ? context_end - end : 4;
+	for (int32_t i = 0; i < left_guard; ++i)
+		if (!skb__same_ascii_seam(layout, context_start + i, window, i)) {
+			skb_layout_destroy(window);
+			return false;
+		}
+	for (int32_t i = 0; i < right_guard; ++i) {
+		const int32_t old_index = context_end - right_guard + i;
+		const int32_t window_index = window_count - right_guard + i;
+		if (!skb__same_ascii_seam(layout, old_index, window, window_index)) {
+			skb_layout_destroy(window);
+			return false;
+		}
+	}
+
+	skb_layout_t* next = skb_layout_create(&layout->params);
+	const int32_t layout_attribute_count = next->attributes_count;
+	if (layout_attribute_count > layout->attributes_count ||
+		layout_attribute_count != layout->params.layout_attributes.attributes_count) {
+		skb_layout_destroy(next);
+		skb_layout_destroy(window);
+		return false;
+	}
+	if (layout->attributes_count > layout_attribute_count) {
+		SKB_ARRAY_RESERVE(next->attributes, layout->attributes_count);
+		memcpy(next->attributes + layout_attribute_count,
+			layout->attributes + layout_attribute_count,
+			(size_t)(layout->attributes_count - layout_attribute_count) * sizeof(skb_attribute_t));
+	}
+	next->attributes_count = layout->attributes_count;
+	next->params.layout_attributes.attributes = next->attributes;
+
+	SKB_ARRAY_RESERVE(next->content_runs, 1);
+	next->content_runs[0] = layout->content_runs[0];
+	next->content_runs[0].text_range.end = new_count;
+	next->content_runs_count = 1;
+	SKB_ARRAY_RESERVE(next->shaping_runs, 1);
+	next->shaping_runs[0] = layout->shaping_runs[0];
+	next->shaping_runs[0].text_range.end = new_count;
+	next->shaping_runs[0].glyph_range.end = new_count;
+	next->shaping_runs[0].cluster_range.end = new_count;
+	next->shaping_runs_count = 1;
+	next->resolved_direction = layout->resolved_direction;
+	skb__reserve_text(next, new_count);
+	SKB_ARRAY_RESERVE(next->clusters, new_count);
+	SKB_ARRAY_RESERVE(next->glyphs, new_count);
+	next->text_count = next->clusters_count = next->glyphs_count = new_count;
+	for (int32_t i = 0; i < new_count; ++i) {
+		const skb_layout_t* source;
+		int32_t source_index;
+		if (i < context_start) {
+			source = layout;
+			source_index = i;
+		} else if (i < context_start + window_count) {
+			source = window;
+			source_index = i - context_start;
+		} else {
+			source = layout;
+			source_index = i - delta;
+		}
+		next->text[i] = source->text[source_index];
+		next->text_props[i] = source->text_props[source_index];
+		next->clusters[i] = source->clusters[source_index];
+		next->clusters[i].text_offset = i;
+		next->clusters[i].glyphs_offset = i;
+		next->glyphs[i] = source->glyphs[source_index];
+		next->glyphs[i].cluster_idx = i;
+		next->glyphs[i].offset_x = 0.f;
+		next->glyphs[i].offset_y = 0.f;
+	}
+	skb__layout_build_context_t build_context = {0};
+	build_context.temp_alloc = temp_alloc;
+	skb__layout_lines(&build_context, next);
+	next->generation = layout->generation == UINT64_MAX ? 1 : layout->generation + 1;
+	skb_layout_destroy(window);
+
+	skb_layout_t previous = *layout;
+	*layout = *next;
+	skb_free(next);
+	previous.should_free_instance = false;
+	skb_layout_destroy(&previous);
+	return true;
+}
+
 void skb_layout_destroy(skb_layout_t* layout)
 {
 	if (!layout) return;
