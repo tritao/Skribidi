@@ -3374,25 +3374,27 @@ bool skb_layout_try_edit_ascii(skb_layout_t* layout, skb_temp_alloc_t* temp_allo
 	SKB_ARRAY_RESERVE(next->clusters, new_count);
 	SKB_ARRAY_RESERVE(next->glyphs, new_count);
 	next->text_count = next->clusters_count = next->glyphs_count = new_count;
+	// Copy the three unchanged/window spans as arrays; only their positional
+	// metadata needs a per-cluster adjustment after the splice.
+	const skb_layout_t* sources[3] = { layout, window, layout };
+	const int32_t source_starts[3] = { 0, 0, context_end };
+	const int32_t dest_starts[3] = { 0, context_start, context_start + window_count };
+	const int32_t counts[3] = { context_start, window_count, layout->text_count - context_end };
+	for (int span = 0; span < 3; ++span) {
+		const size_t count = (size_t)counts[span];
+		if (!count)
+			continue;
+		const skb_layout_t* source = sources[span];
+		const int32_t src = source_starts[span];
+		const int32_t dst = dest_starts[span];
+		memcpy(next->text + dst, source->text + src, count * sizeof(*next->text));
+		memcpy(next->text_props + dst, source->text_props + src, count * sizeof(*next->text_props));
+		memcpy(next->clusters + dst, source->clusters + src, count * sizeof(*next->clusters));
+		memcpy(next->glyphs + dst, source->glyphs + src, count * sizeof(*next->glyphs));
+	}
 	for (int32_t i = 0; i < new_count; ++i) {
-		const skb_layout_t* source;
-		int32_t source_index;
-		if (i < context_start) {
-			source = layout;
-			source_index = i;
-		} else if (i < context_start + window_count) {
-			source = window;
-			source_index = i - context_start;
-		} else {
-			source = layout;
-			source_index = i - delta;
-		}
-		next->text[i] = source->text[source_index];
-		next->text_props[i] = source->text_props[source_index];
-		next->clusters[i] = source->clusters[source_index];
 		next->clusters[i].text_offset = i;
 		next->clusters[i].glyphs_offset = i;
-		next->glyphs[i] = source->glyphs[source_index];
 		next->glyphs[i].cluster_idx = i;
 		next->glyphs[i].offset_x = 0.f;
 		next->glyphs[i].offset_y = 0.f;
