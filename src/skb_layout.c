@@ -33,6 +33,8 @@
 typedef struct skb__layout_build_context_t {
 	uint8_t* emoji_types_buffer;
 	skb_temp_alloc_t* temp_alloc;
+	const skb_layout_t* unchanged_prefix_layout;
+	int32_t unchanged_prefix_end;
 } skb__layout_build_context_t;
 
 
@@ -2516,6 +2518,24 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 	//
 	for (int32_t li = 0; li < layout->lines_count; li++) {
 		skb_layout_line_t* line = &layout->lines[li];
+		// Guarded ASCII edits leave the glyphs and font of strict prefix rows
+		// untouched. Equal source range and geometry retain their exact bounds.
+		if (build_context->unchanged_prefix_layout &&
+			li < build_context->unchanged_prefix_layout->lines_count &&
+			line->text_range.end < build_context->unchanged_prefix_end) {
+			const skb_layout_line_t* previous = &build_context->unchanged_prefix_layout->lines[li];
+			if (line->text_range.start == previous->text_range.start &&
+				line->text_range.end == previous->text_range.end &&
+				line->baseline == previous->baseline &&
+				line->bounds.x == previous->bounds.x &&
+				line->bounds.y == previous->bounds.y &&
+				line->bounds.width == previous->bounds.width &&
+				line->bounds.height == previous->bounds.height) {
+				line->culling_bounds = previous->culling_bounds;
+				line->common_glyph_bounds = previous->common_glyph_bounds;
+				continue;
+			}
+		}
 		skb__update_line_culling_bounds(layout, line);
 	}
 
@@ -3375,6 +3395,8 @@ bool skb_layout_try_edit_ascii(skb_layout_t* layout, skb_temp_alloc_t* temp_allo
 	}
 	skb__layout_build_context_t build_context = {0};
 	build_context.temp_alloc = temp_alloc;
+	build_context.unchanged_prefix_layout = layout;
+	build_context.unchanged_prefix_end = start;
 	skb__layout_lines(&build_context, next);
 	next->generation = layout->generation == UINT64_MAX ? 1 : layout->generation + 1;
 	skb_layout_destroy(window);
