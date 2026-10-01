@@ -3283,9 +3283,17 @@ const skb_glyph_t* skb_layout_get_glyphs(const skb_layout_t* layout)
 bool skb_layout_iterate_render_glyphs(const skb_layout_t* layout, skb_layout_render_glyph_func_t* callback, void* context)
 {
 	assert(layout);
-	assert(callback);
+	return skb_layout_iterate_render_glyphs_range(layout, (skb_range_t){0, layout->lines_count}, callback, context);
+}
 
-	for (int32_t line_idx = 0; line_idx < layout->lines_count; line_idx++) {
+bool skb_layout_iterate_render_glyphs_range(const skb_layout_t* layout, skb_range_t line_range, skb_layout_render_glyph_func_t* callback, void* context)
+{
+	assert(layout);
+	assert(callback);
+	if (line_range.start < 0 || line_range.end < line_range.start || line_range.end > layout->lines_count)
+		return false;
+
+	for (int32_t line_idx = line_range.start; line_idx < line_range.end; line_idx++) {
 		const skb_layout_line_t* line = &layout->lines[line_idx];
 		for (int32_t run_idx = line->layout_run_range.start; run_idx < line->layout_run_range.end; run_idx++) {
 			const skb_layout_run_t* run = &layout->layout_runs[run_idx];
@@ -3359,6 +3367,14 @@ bool skb_layout_prepare_glyphs(
 	skb_rasterizer_t* rasterizer, float pixel_scale, skb_rasterize_alpha_mode_t alpha_mode)
 {
 	assert(layout);
+	return skb_layout_prepare_glyphs_range(layout, (skb_range_t){0, layout->lines_count}, atlas, temp_alloc, rasterizer, pixel_scale, alpha_mode);
+}
+
+bool skb_layout_prepare_glyphs_range(
+	const skb_layout_t* layout, skb_range_t line_range, skb_image_atlas_t* atlas, skb_temp_alloc_t* temp_alloc,
+	skb_rasterizer_t* rasterizer, float pixel_scale, skb_rasterize_alpha_mode_t alpha_mode)
+{
+	assert(layout);
 	assert(atlas);
 	assert(temp_alloc);
 	assert(rasterizer);
@@ -3372,7 +3388,7 @@ bool skb_layout_prepare_glyphs(
 		.alpha_mode = alpha_mode,
 		.valid = true,
 	};
-	if (!skb_layout_iterate_render_glyphs(layout, skb__prepare_render_glyph, &prepare) || !prepare.valid)
+	if (!skb_layout_iterate_render_glyphs_range(layout, line_range, skb__prepare_render_glyph, &prepare) || !prepare.valid)
 		return false;
 
 	// The return value reports whether pixels changed, not whether rasterization

@@ -669,6 +669,12 @@ SKB_API const skb_glyph_t* skb_layout_get_glyphs(const skb_layout_t* layout);
  */
 SKB_API bool skb_layout_iterate_render_glyphs(const skb_layout_t* layout, skb_layout_render_glyph_func_t* callback, void* context);
 
+/** Visits only the half-open range of visual lines, in original visual order.
+ * Invalid line bounds return false without invoking the callback. Empty ranges
+ * are valid. Glyph positions and logical cluster ranges are unchanged.
+ */
+SKB_API bool skb_layout_iterate_render_glyphs_range(const skb_layout_t* layout, skb_range_t line_range, skb_layout_render_glyph_func_t* callback, void* context);
+
 /**
  * Requests and rasterizes all glyph images needed by a layout.
  *
@@ -687,6 +693,14 @@ SKB_API bool skb_layout_iterate_render_glyphs(const skb_layout_t* layout, skb_la
  */
 SKB_API bool skb_layout_prepare_glyphs(
 	const skb_layout_t* layout, skb_image_atlas_t* atlas, skb_temp_alloc_t* temp_alloc,
+	skb_rasterizer_t* rasterizer, float pixel_scale, skb_rasterize_alpha_mode_t alpha_mode);
+
+/** Prepares glyph images only for the half-open range of visual lines.
+ * Uses the same atlas mutation contract as skb_layout_prepare_glyphs().
+ * Invalid line bounds return false; an empty range is valid.
+ */
+SKB_API bool skb_layout_prepare_glyphs_range(
+	const skb_layout_t* layout, skb_range_t line_range, skb_image_atlas_t* atlas, skb_temp_alloc_t* temp_alloc,
 	skb_rasterizer_t* rasterizer, float pixel_scale, skb_rasterize_alpha_mode_t alpha_mode);
 
 /** @return number of clusters in the layout. */

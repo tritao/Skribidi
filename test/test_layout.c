@@ -339,6 +339,24 @@ static int test_long_wrapped_word(void)
 		ENSURE(lines[i].bounds.width <= 200.01f);
 	}
 	ENSURE(end == count + 3);
+	// A request for a middle visual line must not visit the million-glyph tail.
+	const int32_t middle = lines_count / 2;
+	const skb_layout_run_t* runs = skb_layout_get_layout_runs(layout);
+	int32_t expected = 0;
+	for (int32_t i = lines[middle].layout_run_range.start; i < lines[middle].layout_run_range.end; i++)
+		expected += runs[i].glyph_range.end - runs[i].glyph_range.start;
+	int32_t visited = 0;
+	ENSURE(skb_layout_iterate_render_glyphs_range(layout, (skb_range_t){middle, middle + 1}, count_render_glyphs, &visited));
+	ENSURE(visited == expected && visited > 0 && visited < 100);
+	visited = 0;
+	ENSURE(skb_layout_iterate_render_glyphs_range(layout, (skb_range_t){middle, middle}, count_render_glyphs, &visited));
+	ENSURE(visited == 0);
+	ENSURE(!skb_layout_iterate_render_glyphs_range(layout, (skb_range_t){-1, 1}, count_render_glyphs, &visited));
+	ENSURE(!skb_layout_iterate_render_glyphs_range(layout, (skb_range_t){0, lines_count + 1}, count_render_glyphs, &visited));
+	ENSURE(!skb_layout_iterate_render_glyphs_range(layout, (skb_range_t){middle + 1, middle}, count_render_glyphs, &visited));
+	ENSURE(!skb_layout_iterate_render_glyphs_range(layout, (skb_range_t){middle, middle + 1}, stop_after_one_render_glyph, &visited));
+	ENSURE(visited == 1);
+
 	skb_layout_destroy(layout);
 	skb_font_collection_destroy(fonts);
 	skb_temp_alloc_destroy(temp);
