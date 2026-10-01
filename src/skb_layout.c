@@ -2159,6 +2159,14 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 	// Init the line break width to the first line width (will be reset to inner_layout_width after first line).
 	float line_break_width = skb_maxf(0.f, inner_layout_width - indent_increment.first_line_increment);
 
+	// Retain lookahead for a word split over several lines. Scanning the whole
+	// remaining word on every split makes character wrapping quadratic.
+	bool has_word_remainder = false;
+	skb__shaping_run_cluster_iter_t word_end_it = it;
+	double word_remainder_width = 0.0;
+	float word_end_whitespace_width = 0.f;
+	bool word_must_break = false;
+
 	while (skb__shaping_run_cluster_iter_is_valid(&it, layout) && !max_heigh_reached) {
 		// Calc run up to the next line break.
 		skb__shaping_run_cluster_iter_t start_it = it;
@@ -2169,7 +2177,16 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 
 		bool tab_overflows = false;
 		bool must_break = false;
-		while (skb__shaping_run_cluster_iter_is_valid(&end_it, layout)) {
+		bool contains_tab = false;
+		double measured_word_width = 0.0;
+		if (has_word_remainder) {
+			end_it = word_end_it;
+			run_width = (float)word_remainder_width;
+			measured_word_width = word_remainder_width;
+			run_end_whitespace_width = word_end_whitespace_width;
+			must_break = word_must_break;
+		}
+		while (!has_word_remainder && skb__shaping_run_cluster_iter_is_valid(&end_it, layout)) {
 
 			// Advance whole glyph cluster, cannot split in between.
 			const skb_cluster_t* cluster = &layout->clusters[end_it.cluster_idx];
@@ -2198,6 +2215,7 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 				layout->glyphs[cluster_last_glyph_idx].advance_x = tab_width;
 				cluster_width = tab_width;
 				codepoint_is_tab = true;
+				contains_tab = true;
 			}
 
 			// Keep track of the white space after the run end, it will not be taken into account for the line breaking.
@@ -2211,9 +2229,11 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 			} else {
 				if (run_end_whitespace_width > 0.f) {
 					run_width += run_end_whitespace_width;
+					measured_word_width += run_end_whitespace_width;
 					run_end_whitespace_width = 0.f;
 				}
 				run_width += cluster_width;
+				measured_word_width += cluster_width;
 			}
 
 			// Advance to next cluster.
@@ -2227,6 +2247,7 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 				break;
 		}
 
+		has_word_remainder = false;
 		if (text_wrap == SKB_WRAP_WORD_CHAR && run_width > line_break_width) {
 			// If text wrap is set to word & char, allow to break at a character when the whole word does not fit.
 
@@ -2239,6 +2260,11 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 			cur_layout_run = NULL;
 			line_break_width = inner_layout_width;
 
+			// Tabs depend on the current line origin and must be measured again.
+			word_end_it = end_it;
+			word_remainder_width = measured_word_width;
+			word_end_whitespace_width = run_end_whitespace_width;
+			word_must_break = must_break;
 			// Fit as many glyphs as we can on the line, and adjust run_end up to that point.
 			run_width = 0.f;
 			skb__shaping_run_cluster_iter_t cit = start_it;
@@ -2259,6 +2285,11 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 				skb__shaping_run_cluster_iter_next(&end_it, layout);
 			}
 
+			word_remainder_width -= run_width;
+			// Re-measure the short tail in its original accumulation order, so
+			// rounding of the cached total cannot change the final wrap decision.
+			has_word_remainder = !contains_tab && word_remainder_width > 2.0 * line_break_width
+				&& skb__shaping_run_cluster_iter_less(&end_it, &word_end_it);
 			// Update width so far.
 			cur_line->bounds.width += run_width;
 			cur_layout_run = skb__line_append_shaping_run_range(layout, cur_line, cur_layout_run, start_it, end_it);

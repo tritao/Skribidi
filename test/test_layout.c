@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 #include "test_macros.h"
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
 #include "skribidi/skb_layout.h"
 #include "skribidi/skb_font_collection.h"
 
@@ -301,9 +304,52 @@ static int test_word_start_at_document_start(void)
 	return 0;
 }
 
+// A wrapped word must not rescan its entire suffix for every visual line.
+static int test_long_wrapped_word(void)
+{
+	const int32_t count = 1024 * 1024;
+	char* text = malloc((size_t)count + 5);
+	ENSURE(text != NULL);
+	memset(text, 'a', (size_t)count);
+	memcpy(text + count, " \nb", 4);
+	skb_temp_alloc_t* temp = skb_temp_alloc_create(1024);
+	skb_font_collection_t* fonts = skb_font_collection_create();
+	ENSURE(skb_font_collection_add_font(fonts, "data/IBMPlexSans-Regular.ttf", SKB_FONT_FAMILY_DEFAULT, NULL));
+	const skb_attribute_t attributes[] = {
+		skb_attribute_make_font_size(15.f),
+		skb_attribute_make_text_wrap(SKB_WRAP_WORD_CHAR),
+	};
+	const skb_layout_params_t params = {
+		.font_collection = fonts,
+		.layout_width = 200.f,
+		.layout_attributes = SKB_ATTRIBUTE_SET_FROM_STATIC_ARRAY(attributes),
+	};
+	const clock_t started = clock();
+	skb_layout_t* layout = skb_layout_create_utf8(temp, &params, text, -1, (skb_attribute_set_t){0});
+	ENSURE(layout != NULL);
+	printf("long wrapped word: %.3f CPU seconds\n", (double)(clock() - started) / CLOCKS_PER_SEC);
+	const int32_t lines_count = skb_layout_get_lines_count(layout);
+	const skb_layout_line_t* lines = skb_layout_get_lines(layout);
+	ENSURE(lines_count > 1000);
+	int32_t end = 0;
+	for (int32_t i = 0; i < lines_count; i++) {
+		ENSURE(lines[i].text_range.start == end);
+		ENSURE(lines[i].text_range.end >= end);
+		end = lines[i].text_range.end;
+		ENSURE(lines[i].bounds.width <= 200.01f);
+	}
+	ENSURE(end == count + 3);
+	skb_layout_destroy(layout);
+	skb_font_collection_destroy(fonts);
+	skb_temp_alloc_destroy(temp);
+	free(text);
+	return 0;
+}
+
 int layout_tests(void)
 {
 	RUN_SUBTEST(test_init);
+	RUN_SUBTEST(test_long_wrapped_word);
 	RUN_SUBTEST(test_missing_script);
 	RUN_SUBTEST(test_render_glyph_iterator);
 	RUN_SUBTEST(test_mixed_rtl_glyph_range);
