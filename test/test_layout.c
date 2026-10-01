@@ -235,6 +235,36 @@ static int test_caret_pos(void)
 	return 0;
 }
 
+static int test_missing_glyph_caret_position(void)
+{
+	skb_temp_alloc_t* temp_alloc = skb_temp_alloc_create(1024);
+	ENSURE(temp_alloc != NULL);
+	skb_font_collection_t* fonts = skb_font_collection_create();
+	ENSURE(fonts != NULL);
+	ENSURE(skb_font_collection_add_font(fonts, "data/IBMPlexSans-Regular.ttf", SKB_FONT_FAMILY_DEFAULT, NULL));
+	skb_attribute_t attributes[] = { skb_attribute_make_font_size(15.f) };
+	skb_layout_params_t params = {
+		.font_collection = fonts,
+		.layout_width = 200.f,
+		.layout_height = 100.f,
+		.layout_attributes = SKB_ATTRIBUTE_SET_FROM_STATIC_ARRAY(attributes),
+	};
+	// The font has no emoji glyph. Its insertion position must still stay
+	// between the surrounding characters instead of returning the line origin.
+	skb_layout_t* layout = skb_layout_create_utf8(temp_alloc, &params, "abc🙂def", -1, (skb_attribute_set_t){0});
+	ENSURE(layout != NULL);
+	const skb_caret_info_t before = skb_layout_get_caret_info_at(layout, (skb_text_position_t){ .offset = 2 });
+	const skb_caret_info_t missing = skb_layout_get_caret_info_at(layout, (skb_text_position_t){ .offset = 3 });
+	const skb_caret_info_t after = skb_layout_get_caret_info_at(layout, (skb_text_position_t){ .offset = 4 });
+	ENSURE(before.x > 0.f);
+	ENSURE(missing.x >= before.x);
+	ENSURE(missing.x <= after.x);
+	skb_layout_destroy(layout);
+	skb_font_collection_destroy(fonts);
+	skb_temp_alloc_destroy(temp_alloc);
+	return 0;
+}
+
 static int test_word_start_at_document_start(void)
 {
 	skb_temp_alloc_t* temp_alloc = skb_temp_alloc_create(1024);
@@ -278,6 +308,7 @@ int layout_tests(void)
 	RUN_SUBTEST(test_render_glyph_iterator);
 	RUN_SUBTEST(test_mixed_rtl_glyph_range);
 	RUN_SUBTEST(test_caret_pos);
+	RUN_SUBTEST(test_missing_glyph_caret_position);
 	RUN_SUBTEST(test_word_start_at_document_start);
 	return 0;
 }

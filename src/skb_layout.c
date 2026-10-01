@@ -3868,8 +3868,25 @@ skb_caret_info_t skb_layout_get_caret_info_at_line(const skb_layout_t* layout, i
 	skb_caret_iterator_result_t right = {0};
 	bool found_x = false;
 	bool found_style = false;
+	const int32_t requested_offset = skb_layout_get_offset_from_text_position(layout, pos);
+	int32_t nearest_distance = layout->text_count + 1;
+	skb_caret_iterator_result_t nearest = {0};
+	float nearest_x = caret_info.x;
 
 	while (skb_caret_iterator_next(&caret_iter, &x, &advance, &mid_point, &left, &right) && (!found_style || !found_x)) {
+
+		// A missing glyph can omit the requested affinity while a neighboring caret
+		// still represents the same insertion offset. Retain its visual position.
+		const skb_caret_iterator_result_t candidates[] = {left, right};
+		for (int32_t i = 0; i < 2; i++) {
+			const int32_t offset = skb_layout_get_offset_from_text_position(layout, candidates[i].text_position);
+			const int32_t distance = offset < requested_offset ? requested_offset - offset : offset - requested_offset;
+			if (distance < nearest_distance) {
+				nearest_distance = distance;
+				nearest = candidates[i];
+				nearest_x = x;
+			}
+		}
 
 		if (left.text_position.offset == caret_style_text_offset && left.text_position.affinity == SKB_AFFINITY_TRAILING) {
 			layout_run_idx = left.layout_run_idx;
@@ -3891,6 +3908,15 @@ skb_caret_info_t skb_layout_get_caret_info_at_line(const skb_layout_t* layout, i
 			caret_info.x = x;
 			caret_info.direction = right.direction;
 			found_x = true;
+		}
+	}
+
+	if (!found_x && nearest_distance <= layout->text_count) {
+		caret_info.x = nearest_x;
+		caret_info.direction = nearest.direction;
+		if (!found_style) {
+			layout_run_idx = nearest.layout_run_idx;
+			glyph_idx = nearest.glyph_idx;
 		}
 	}
 
