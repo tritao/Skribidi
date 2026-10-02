@@ -577,25 +577,27 @@ SKB_API void skb_layout_set_utf8(
 	skb_layout_t* layout, skb_temp_alloc_t* temp_alloc, const skb_layout_params_t* params,
 	const char* text, int32_t text_count, skb_attribute_set_t attributes);
 
-/** Reuses shaped glyphs around a small edit in a single-run lowercase Latin
- * layout, then recomputes lines and all geometry in one layout generation.
- * Returns false without changing layout when the edit or shaping seam is not
- * supported. Callers should rebuild normally in that case. Offsets count
- * Unicode codepoints; replacement_count is UTF-8 bytes or -1 for a C string.
- */
 /** Creates an owned edited generation without modifying the source layout.
  * Uses the same guards and codepoint offsets as skb_layout_try_edit_ascii.
  * Returns NULL on rejection; both success and rejection leave source intact.
  * The result has an independent lifetime and must be destroyed by the caller.
- * Validated stable-row edits share immutable shape buffers. Mutable source
- * rebuilds detach from shared buffers before writing.
+ * Non-truncating supported edits share immutable shape buffers. Equal-advance
+ * stable-row edits also share row metadata. Mutable source rebuilds detach
+ * from shared buffers before writing.
  * Referenced font/icon/attribute collections retain their normal caller-owned
- * lifetime contract. Other accepted edits materialize for full line reflow.
+ * lifetime contract. Changed wrapping currently owns new row arrays; shape-
+ * mutating overflow modes also materialize glyph/cluster buffers.
  */
 SKB_API skb_layout_t* skb_layout_create_ascii_edit(
 	const skb_layout_t* source, skb_temp_alloc_t* temp_alloc, int32_t start, int32_t end,
 	const char* replacement, int32_t replacement_count);
 
+/** Reuses shaped glyphs around a small edit in a single-run lowercase Latin
+ * layout, then publishes complete geometry in one layout generation.
+ * Returns false without changing layout when the edit or shaping seam is not
+ * supported. Callers should rebuild normally in that case. Offsets count
+ * Unicode codepoints; replacement_count is UTF-8 bytes or -1 for a C string.
+ */
 SKB_API bool skb_layout_try_edit_ascii(
 	skb_layout_t* layout, skb_temp_alloc_t* temp_alloc, int32_t start, int32_t end,
 	const char* replacement, int32_t replacement_count);
@@ -676,7 +678,9 @@ SKB_API skb_text_property_t skb_layout_get_text_property_at(const skb_layout_t* 
 
 /** @return number of layout runs in the layout. */
 SKB_API int32_t skb_layout_get_layout_runs_count(const skb_layout_t* layout);
-/** @return const pointer to the layout runs. See skb_layout_get_layout_runs_count() to get number of glyph runs. */
+/** @return const pointer to layout runs, valid until layout mutation/destruction.
+ * May populate a contiguous compatibility cache; indexed reads do not require it.
+ * See skb_layout_get_layout_runs_count() for the number of runs. */
 SKB_API const skb_layout_run_t* skb_layout_get_layout_runs(const skb_layout_t* layout);
 /** Returns a value at a valid index without exposing contiguous storage.
  * layout must be non-NULL; index must be in the corresponding count range. */
@@ -753,7 +757,9 @@ SKB_API const skb_decoration_t* skb_layout_get_decorations(const skb_layout_t* l
 
 /** @return number of lines in the layout. */
 SKB_API int32_t skb_layout_get_lines_count(const skb_layout_t* layout);
-/** @return const pointer to the lines. See skb_layout_get_lines_count() to get number of lines. */
+/** @return const pointer to lines, valid until layout mutation/destruction.
+ * May populate a contiguous compatibility cache; indexed reads do not require it.
+ * See skb_layout_get_lines_count() for the number of lines. */
 SKB_API const skb_layout_line_t* skb_layout_get_lines(const skb_layout_t* layout);
 /** Returns a value at a valid index without exposing contiguous storage.
  * layout must be non-NULL; index must be in the corresponding count range. */

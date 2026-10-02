@@ -45,6 +45,143 @@ static void skb__materialize_shape_for_reflow(skb_layout_t* layout, bool positio
 static bool skb__verify_ascii_shape(const skb_layout_t* layout);
 static bool skb__verify_indexed_ascii_rows(const skb_layout_t* layout);
 
+static void skb__release_row_block(skb__row_block_t* block)
+{
+	if (!block || --block->references > 0) return;
+	skb_free(block->lines);
+	skb_free(block->runs);
+	skb_free(block);
+}
+
+static void skb__release_row_pieces(skb_layout_t* layout)
+{
+	for (int32_t i = 0; i < layout->row_pieces_count; ++i)
+		skb__release_row_block(layout->row_pieces[i].block);
+	skb_free(layout->row_pieces);
+	layout->row_pieces = NULL;
+	layout->row_pieces_count = layout->row_pieces_cap = 0;
+	if (layout->row_cache) {
+		skb_free(layout->row_cache->lines);
+		skb_free(layout->row_cache->runs);
+		skb_free(layout->row_cache);
+		layout->row_cache = NULL;
+	}
+}
+
+static void skb__detach_rows(skb_layout_t* layout, bool reuse)
+{
+	if (layout->row_block) {
+		skb__row_block_t* block = layout->row_block;
+		if (reuse && block->references == 1) {
+			block->lines = NULL;
+			block->runs = NULL;
+		} else {
+			layout->lines = NULL;
+			layout->layout_runs = NULL;
+			layout->lines_cap = layout->layout_runs_cap = 0;
+		}
+		skb__release_row_block(block);
+		layout->row_block = NULL;
+	}
+	skb__release_row_pieces(layout);
+}
+
+static void skb__retain_flat_rows(skb_layout_t* layout)
+{
+	if (!layout->ascii_rows_valid || layout->row_block || layout->row_pieces_count) return;
+	assert(layout->lines_count == layout->layout_runs_count);
+	layout->row_block = skb_malloc(sizeof(*layout->row_block));
+	*layout->row_block = (skb__row_block_t){
+		.references = 1, .count = layout->lines_count,
+		.lines = layout->lines, .runs = layout->layout_runs,
+	};
+}
+
+static void skb__append_row_piece(skb_layout_t* layout, skb__row_block_t* block,
+	int32_t source, int32_t destination, int32_t count, int32_t text_delta)
+{
+	if (!count) return;
+	assert(source >= 0 && source + count <= block->count);
+	if (layout->row_pieces_count) {
+		skb__row_piece_t* last = &layout->row_pieces[layout->row_pieces_count - 1];
+		if (last->block == block && last->text_delta == text_delta &&
+			last->source_start + last->count == source &&
+			last->destination_start + last->count == destination) {
+			last->count += count;
+			return;
+		}
+	}
+	SKB_ARRAY_RESERVE(layout->row_pieces, layout->row_pieces_count + 1);
+	layout->row_pieces[layout->row_pieces_count++] = (skb__row_piece_t){
+		.block = block, .source_start = source, .destination_start = destination,
+		.count = count, .text_delta = text_delta,
+	};
+	block->references++;
+	if (!layout->row_cache) {
+		layout->row_cache = skb_malloc(sizeof(*layout->row_cache));
+		SKB_ZERO_STRUCT(layout->row_cache);
+	}
+}
+
+static void skb__append_row_range(skb_layout_t* next, const skb_layout_t* old,
+	int32_t start, int32_t end)
+{
+	if (start == end) return;
+	if (!old->row_pieces_count) {
+		assert(old->row_block);
+		skb__append_row_piece(next, old->row_block, start, start, end - start, 0);
+		return;
+	}
+	for (int32_t i = 0; i < old->row_pieces_count; ++i) {
+		const skb__row_piece_t* piece = &old->row_pieces[i];
+		const int32_t lo = skb_maxi(start, piece->destination_start);
+		const int32_t hi = skb_mini(end, piece->destination_start + piece->count);
+		if (lo < hi)
+			skb__append_row_piece(next, piece->block,
+				piece->source_start + lo - piece->destination_start, lo, hi - lo, piece->text_delta);
+	}
+}
+
+static const skb__row_piece_t* skb__row_piece_at(const skb_layout_t* layout, int32_t index)
+{
+	int32_t lo = 0, hi = layout->row_pieces_count;
+	while (lo < hi) {
+		const int32_t mid = lo + (hi - lo) / 2;
+		const skb__row_piece_t* piece = &layout->row_pieces[mid];
+		if (index >= piece->destination_start + piece->count) lo = mid + 1;
+		else hi = mid;
+	}
+	assert(lo < layout->row_pieces_count);
+	return &layout->row_pieces[lo];
+}
+
+static void skb__copy_rows(skb_layout_t* next, const skb_layout_t* old)
+{
+	SKB_ARRAY_RESERVE(next->lines, old->lines_count);
+	SKB_ARRAY_RESERVE(next->layout_runs, old->layout_runs_count);
+	for (int32_t i = 0; i < old->lines_count; ++i)
+		next->lines[i] = skb_layout_get_line_at(old, i);
+	for (int32_t i = 0; i < old->layout_runs_count; ++i)
+		next->layout_runs[i] = skb_layout_get_layout_run_at(old, i);
+}
+
+static void skb__materialize_rows(skb_layout_t* layout)
+{
+	if (!layout->row_pieces_count && (!layout->row_block || layout->row_block->references == 1)) {
+		skb__detach_rows(layout, true);
+		return;
+	}
+	skb_layout_line_t* lines = skb_malloc((size_t)layout->lines_count * sizeof(*lines));
+	skb_layout_run_t* runs = skb_malloc((size_t)layout->layout_runs_count * sizeof(*runs));
+	for (int32_t i = 0; i < layout->lines_count; ++i) lines[i] = skb_layout_get_line_at(layout, i);
+	for (int32_t i = 0; i < layout->layout_runs_count; ++i) runs[i] = skb_layout_get_layout_run_at(layout, i);
+	skb__detach_rows(layout, false);
+	layout->lines = lines;
+	layout->layout_runs = runs;
+	layout->lines_cap = layout->lines_count;
+	layout->layout_runs_cap = layout->layout_runs_count;
+}
+
 static void skb__release_shape_block(skb__shape_block_t* block)
 {
 	if (!block || --block->references > 0) return;
@@ -66,6 +203,7 @@ static void skb__retain_flat_shape(skb_layout_t* layout)
 	layout->shape_block = block;
 	layout->ascii_shape_valid = skb__verify_ascii_shape(layout);
 	layout->ascii_rows_valid = layout->ascii_shape_valid && skb__verify_indexed_ascii_rows(layout);
+	skb__retain_flat_rows(layout);
 }
 
 static void skb__release_shape_pieces(skb_layout_t* layout)
@@ -1951,8 +2089,8 @@ static void skb__append_reflow_row(skb_layout_t* layout, const skb_layout_t* old
 	SKB_ARRAY_RESERVE(layout->layout_runs, run_index + 1);
 	skb_layout_line_t* line = &layout->lines[layout->lines_count++];
 	skb_layout_run_t* run = &layout->layout_runs[layout->layout_runs_count++];
-	*line = old->lines[source_row];
-	*run = old->layout_runs[source_row];
+	*line = skb_layout_get_line_at(old, source_row);
+	*run = skb_layout_get_layout_run_at(old, source_row);
 	line->text_range.start += delta; line->text_range.end += delta;
 	line->last_grapheme_offset += delta;
 	line->layout_run_range = (skb_range_t){run_index, run_index + 1};
@@ -1984,7 +2122,8 @@ static void skb__update_line_culling_bounds(skb_layout_t* layout, skb_layout_lin
 		line->culling_bounds = skb_rect2_make_undefined();
 		line->common_glyph_bounds = skb_rect2_make_undefined();
 		for (int32_t ri = line->layout_run_range.start; ri < line->layout_run_range.end; ri++) {
-			skb_layout_run_t* layout_run = &layout->layout_runs[ri];
+			const skb_layout_run_t layout_run_value = skb_layout_get_layout_run_at(layout, ri);
+			const skb_layout_run_t* layout_run = &layout_run_value;
 			if (layout_run->type == SKB_CONTENT_RUN_OBJECT || layout_run->type == SKB_CONTENT_RUN_ICON) {
 				// Object or Icon
 				line->culling_bounds = skb_rect2_union(line->culling_bounds, layout_run->bounds);
@@ -2324,7 +2463,7 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 		int32_t lo = 0, hi = old->lines_count;
 		while (lo < hi) {
 			const int32_t mid = lo + (hi - lo) / 2;
-			if (old->lines[mid].text_range.end <= build_context->culling_edit_start) lo = mid + 1;
+			if (skb_layout_get_line_at(old, mid).text_range.end <= build_context->culling_edit_start) lo = mid + 1;
 			else hi = mid;
 		}
 		// The initial empty row has no content and may be replaced by the prefix.
@@ -2333,12 +2472,13 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 			skb__append_reflow_row(layout, old, row, 0, &calculated_size);
 		layout->reused_prefix_rows = lo;
 		cur_line = skb__add_line(layout);
-		it.cluster_idx = lo < old->lines_count ? old->lines[lo].text_range.start : 0;
+		it.cluster_idx = lo < old->lines_count ? skb_layout_get_line_at(old, lo).text_range.start : 0;
 		if (lo) line_break_width = inner_layout_width;
 	}
 
 	// Retain lookahead for a word split over several lines. Scanning the whole
 	// remaining word on every split makes character wrapping quadratic.
+	const skb__shape_piece_t* measured_piece = NULL;
 	bool has_word_remainder = false;
 	skb__shaping_run_cluster_iter_t word_end_it = it;
 	double word_remainder_width = 0.0;
@@ -2353,14 +2493,14 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 			int32_t lo = 0, hi = old->lines_count;
 			while (lo < hi) {
 				const int32_t mid = lo + (hi - lo) / 2;
-				if (old->lines[mid].text_range.start < source) lo = mid + 1;
+				if (skb_layout_get_line_at(old, mid).text_range.start < source) lo = mid + 1;
 				else hi = mid;
 			}
 			const bool empty = skb_range_is_empty(cur_line->layout_run_range);
 			const int32_t completed_rows = layout->lines_count - (empty ? 1 : 0);
 			const bool begins_row = empty || cur_line->bounds.width +
 				skb__layout_shape_glyph_at(layout, it.cluster_idx).advance_x > line_break_width;
-			if (lo < old->lines_count && old->lines[lo].text_range.start == source &&
+			if (lo < old->lines_count && skb_layout_get_line_at(old, lo).text_range.start == source &&
 				lo == completed_rows && begins_row) {
 				if (empty) --layout->lines_count;
 				else skb__finalize_line(layout, cur_line, false, NULL, line_break_width, &calculated_size);
@@ -2393,15 +2533,39 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 
 			// Advance whole glyph cluster, cannot split in between.
 			++layout->reflow_measured_clusters;
-			const skb_cluster_t cluster = skb__layout_cluster_at(layout, end_it.cluster_idx);
-			float cluster_width = skb__get_cluster_width(layout, end_it.shaping_run_idx, end_it.cluster_idx);
-
-			const int cp_offset = cluster.text_offset + cluster.text_count - 1;
-			const uint8_t text_flags = skb__layout_text_property_at(layout, cp_offset).flags;
+			skb_cluster_t cluster;
+			float cluster_width;
+			uint8_t text_flags;
+			uint32_t codepoint;
+			if (layout->shape_pieces_count) {
+				// Indexed shape pieces have one glyph per ASCII codepoint. Read
+				// the immutable block once and keep the piece across sequential
+				// clusters; lookahead may restart before the previous position.
+				const int32_t index = end_it.cluster_idx;
+				if (!measured_piece || index < measured_piece->destination_start ||
+					index >= measured_piece->destination_start + measured_piece->count)
+					measured_piece = skb__layout_piece_at(layout, index);
+				const int32_t source = measured_piece->source_start + index - measured_piece->destination_start;
+				cluster = measured_piece->block->clusters[source];
+				cluster.text_offset += measured_piece->destination_start - measured_piece->source_start;
+				cluster.glyphs_offset += measured_piece->destination_start - measured_piece->source_start;
+				cluster_width = measured_piece->block->glyphs[source].advance_x;
+				const skb__shaping_run_t* run = &layout->shaping_runs[end_it.shaping_run_idx];
+				if (index == run->cluster_range.start) cluster_width += run->padding_start;
+				if (index == run->cluster_range.end - 1) cluster_width += run->padding_end;
+				text_flags = measured_piece->block->properties[source].flags;
+				codepoint = measured_piece->block->text[source];
+			} else {
+				cluster = skb__layout_cluster_at(layout, end_it.cluster_idx);
+				cluster_width = skb__get_cluster_width(layout, end_it.shaping_run_idx, end_it.cluster_idx);
+				const int cp_offset = cluster.text_offset + cluster.text_count - 1;
+				text_flags = skb__layout_text_property_at(layout, cp_offset).flags;
+				codepoint = skb__layout_text_at(layout, cp_offset);
+			}
 
 			// Handle tabs
 			bool codepoint_is_tab = false;
-			if (skb__layout_text_at(layout, cp_offset) == SKB_CHAR_HORIZONTAL_TAB && tab_stop_increment > 0.f) {
+			if (codepoint == SKB_CHAR_HORIZONTAL_TAB && tab_stop_increment > 0.f) {
 				// Calculate the next tab stop.
 				const float cur_pos = cur_line->bounds.width + run_width + run_end_whitespace_width;
 				const float next_tab_stop = floorf((cur_pos + tab_stop_increment) / tab_stop_increment) * tab_stop_increment;
@@ -2451,7 +2615,10 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 			}
 			if (text_flags & SKB_TEXT_PROP_ALLOW_LINE_BREAK)
 				break;
-			if (build_context->incremental_rows && measured_word_width > 2.0 * line_break_width)
+			// Once a word exceeds one complete row, WORD_CHAR must split it.
+			// Further lookahead cannot change that decision; retain the original
+			// accumulation order while measuring only through the first overflow.
+			if (build_context->incremental_rows && measured_word_width > line_break_width)
 				break;
 		}
 
@@ -2739,7 +2906,8 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 		const int32_t source_delta = suffix ? build_context->edit_delta : 0;
 		if (build_context->reusable_culling_layout &&
 			li < build_context->reusable_culling_layout->lines_count && (prefix || suffix)) {
-			const skb_layout_line_t* previous = &build_context->reusable_culling_layout->lines[li];
+			const skb_layout_line_t previous_value = skb_layout_get_line_at(build_context->reusable_culling_layout, li);
+			const skb_layout_line_t* previous = &previous_value;
 			if (line->text_range.start == previous->text_range.start + source_delta &&
 				line->text_range.end == previous->text_range.end + source_delta &&
 				line->baseline == previous->baseline &&
@@ -3045,6 +3213,7 @@ static void skb__copy_params_attributes(skb_layout_t* layout, const skb_layout_p
 
 bool skb_layout_add_ellipsis_to_last_line(skb_layout_t* layout)
 {
+	skb__materialize_rows(layout);
 	if (layout->shape_pieces_count)
 		skb__materialize_shape_for_reflow(layout, true);
 	if (layout->shape_block && layout->shape_block->references > 1) {
@@ -3142,6 +3311,7 @@ void skb_layout_reset(skb_layout_t* layout)
 	layout->reflow_measured_clusters = 0;
 	layout->reflowed_rows = layout->reused_prefix_rows = layout->reused_suffix_rows = 0;
 	skb__detach_shape(layout, true);
+	skb__detach_rows(layout, true);
 
 	layout->params = (skb_layout_params_t){0};
 	layout->bounds = (skb_rect2_t){0};
@@ -3547,39 +3717,35 @@ static bool skb__reuse_ascii_line_geometry(skb_layout_t* next, const skb_layout_
 			skb__layout_text_property_at(old, old_i).script != window->text_props[i].script)
 			return false;
 	}
-	SKB_ARRAY_RESERVE(next->lines, old->lines_count);
-	SKB_ARRAY_RESERVE(next->layout_runs, old->layout_runs_count);
-	SKB_ARRAY_RESERVE(next->decorations, old->decorations_count);
-	memcpy(next->lines, old->lines, (size_t)old->lines_count * sizeof(*next->lines));
-	memcpy(next->layout_runs, old->layout_runs,
-		(size_t)old->layout_runs_count * sizeof(*next->layout_runs));
-	if (old->decorations_count)
-		memcpy(next->decorations, old->decorations,
-			(size_t)old->decorations_count * sizeof(*next->decorations));
 	next->lines_count = old->lines_count;
 	next->layout_runs_count = old->layout_runs_count;
-	next->decorations_count = old->decorations_count;
 	next->bounds = old->bounds;
 	next->padding = old->padding;
 	next->advance_y = old->advance_y;
 	next->flags = old->flags;
-	if (!next->shape_pieces_count)
-		for (int32_t i = context_start; i < context_start + window->text_count; ++i) {
-			const skb_glyph_t glyph = skb__layout_glyph_at(old, i);
-			next->glyphs[i].offset_x = glyph.offset_x;
-			next->glyphs[i].offset_y = glyph.offset_y;
-		}
-	int32_t lo = 0, hi = next->lines_count;
-	while (lo < hi) {
-		const int32_t mid = lo + (hi - lo) / 2;
-		if (next->lines[mid].text_range.end <= context_start)
-			lo = mid + 1;
-		else
-			hi = mid;
+	const int32_t first = skb_layout_get_line_index(old, (skb_text_position_t){.offset = context_start});
+	const int32_t end = skb_layout_get_line_index(old,
+		(skb_text_position_t){.offset = context_start + window->text_count - 1}) + 1;
+	const int32_t count = end - first;
+	skb__row_block_t* changed = skb_malloc(sizeof(*changed));
+	*changed = (skb__row_block_t){.references = 1, .count = count,
+		.lines = skb_malloc((size_t)count * sizeof(*changed->lines)),
+		.runs = skb_malloc((size_t)count * sizeof(*changed->runs))};
+	for (int32_t i = 0; i < count; ++i) {
+		changed->lines[i] = skb_layout_get_line_at(old, first + i);
+		changed->runs[i] = skb_layout_get_layout_run_at(old, first + i);
+		changed->lines[i].layout_run_range = (skb_range_t){i, i + 1};
 	}
-	for (int32_t row = lo; row < next->lines_count &&
-		next->lines[row].text_range.start < context_start + window->text_count; ++row)
-		skb__update_line_culling_bounds(next, &next->lines[row]);
+	skb__append_row_range(next, old, 0, first);
+	skb__append_row_piece(next, changed, 0, first, count, 0);
+	skb__append_row_range(next, old, end, old->lines_count);
+	for (int32_t i = 0; i < count; ++i) {
+		skb_layout_line_t line = skb_layout_get_line_at(next, first + i);
+		skb__update_line_culling_bounds(next, &line);
+		line.layout_run_range = (skb_range_t){i, i + 1};
+		changed->lines[i] = line;
+	}
+	skb__release_row_block(changed);
 	return true;
 }
 
@@ -3617,7 +3783,8 @@ static bool skb__reuse_ascii_rows_with_stable_breaks(skb_layout_t* next,
 			(SKB_TEXT_PROP_ALLOW_LINE_BREAK | SKB_TEXT_PROP_MUST_LINE_BREAK))
 			return false;
 	const int32_t last_row = old->lines_count - 1;
-	const skb_layout_line_t* last = &old->lines[last_row];
+	const skb_layout_line_t last_value = skb_layout_get_line_at(old, last_row);
+	const skb_layout_line_t* last = &last_value;
 	if (last->text_range.end != old->text_count ||
 		last->text_range.end - last->text_range.start + delta <= 0)
 		return false;
@@ -3625,8 +3792,10 @@ static bool skb__reuse_ascii_rows_with_stable_breaks(skb_layout_t* next,
 	bool valid = true;
 	int32_t expected = 0;
 	for (int32_t row = 0; row < old->lines_count && valid; ++row) {
-		const skb_layout_line_t* line = &old->lines[row];
-		const skb_layout_run_t* run = &old->layout_runs[row];
+		const skb_layout_line_t line_value = skb_layout_get_line_at(old, row);
+		const skb_layout_line_t* line = &line_value;
+		const skb_layout_run_t run_value = skb_layout_get_layout_run_at(old, row);
+		const skb_layout_run_t* run = &run_value;
 		const int32_t row_end = line->text_range.end + (row == last_row ? delta : 0);
 		if (line->text_range.start != expected || row_end <= expected ||
 			line->layout_run_range.start != row || line->layout_run_range.end != row + 1 ||
@@ -3654,11 +3823,7 @@ static bool skb__reuse_ascii_rows_with_stable_breaks(skb_layout_t* next,
 		skb_free(widths);
 		return false;
 	}
-	SKB_ARRAY_RESERVE(next->lines, old->lines_count);
-	SKB_ARRAY_RESERVE(next->layout_runs, old->layout_runs_count);
-	memcpy(next->lines, old->lines, (size_t)old->lines_count * sizeof(*next->lines));
-	memcpy(next->layout_runs, old->layout_runs,
-		(size_t)old->layout_runs_count * sizeof(*next->layout_runs));
+	skb__copy_rows(next, old);
 	next->lines_count = old->lines_count;
 	next->layout_runs_count = old->layout_runs_count;
 	next->bounds = old->bounds;
@@ -3678,7 +3843,7 @@ static bool skb__reuse_ascii_rows_with_stable_breaks(skb_layout_t* next,
 		run->bounds.width = widths[row];
 		float x = line->bounds.x;
 		bool same_glyph_geometry = row < last_row &&
-			widths[row] == old->lines[row].bounds.width;
+			widths[row] == skb_layout_get_line_at(old, row).bounds.width;
 		for (int32_t i = line->text_range.start; i < line->text_range.end; ++i) {
 			const skb_glyph_t glyph = skb__layout_shape_glyph_at(next, i);
 			if (!next->shape_pieces_count) {
@@ -3884,8 +4049,10 @@ skb_layout_t* skb_layout_create_ascii_edit(const skb_layout_t* layout, skb_temp_
 		indent.first_line_increment == 0.f && indent.level_increment == 0.f &&
 		skb_attributes_get_indent_level(layout->params.layout_attributes, layout->params.attribute_collection) == 0;
 	if (build_context.incremental_rows) {
-		const skb_layout_line_t* first_line = &layout->lines[0];
-		const skb_layout_run_t* first_run = &layout->layout_runs[0];
+		const skb_layout_line_t first_line_value = skb_layout_get_line_at(layout, 0);
+		const skb_layout_line_t* first_line = &first_line_value;
+		const skb_layout_run_t first_run_value = skb_layout_get_layout_run_at(layout, 0);
+		const skb_layout_run_t* first_run = &first_run_value;
 		const skb_font_t* font = skb_font_collection_get_font(layout->params.font_collection, first_run->font_handle);
 		const float ascender = font->metrics.ascender * first_run->font_size;
 		const float descender = font->metrics.descender * first_run->font_size;
@@ -3894,8 +4061,9 @@ skb_layout_t* skb_layout_create_ascii_edit(const skb_layout_t* layout, skb_temp_
 			first_run->padding.top == 0.f && first_run->padding.bottom == 0.f &&
 			first_line->ascender == ascender && first_line->descender == descender;
 	}
-	const bool same_metrics = window->lines[0].bounds.height == layout->lines[0].bounds.height &&
-		window->lines[0].ascender == layout->lines[0].ascender && window->lines[0].descender == layout->lines[0].descender;
+	const skb_layout_line_t source_first_line = skb_layout_get_line_at(layout, 0);
+	const bool same_metrics = window->lines[0].bounds.height == source_first_line.bounds.height &&
+		window->lines[0].ascender == source_first_line.ascender && window->lines[0].descender == source_first_line.descender;
 	build_context.incremental_rows = build_context.incremental_rows && same_metrics;
 	const bool reused_lines = can_index && same_metrics && (delta == 0
 		? skb__reuse_ascii_line_geometry(next, layout, window, context_start)
@@ -3919,6 +4087,7 @@ skb_layout_t* skb_layout_create_ascii_edit(const skb_layout_t* layout, skb_temp_
 		next->ascii_shape_valid = true;
 		next->ascii_rows_valid = true;
 	}
+	skb__retain_flat_rows(next);
 	next->generation = layout->generation == UINT64_MAX ? 1 : layout->generation + 1;
 	skb_layout_destroy(window);
 
@@ -3944,6 +4113,7 @@ void skb_layout_destroy(skb_layout_t* layout)
 {
 	if (!layout) return;
 	skb__detach_shape(layout, false);
+	skb__detach_rows(layout, false);
 
 	skb_free(layout->attributes);
 	skb_free(layout->content_runs);
@@ -4030,13 +4200,24 @@ int32_t skb_layout_get_layout_runs_count(const skb_layout_t* layout)
 const skb_layout_run_t* skb_layout_get_layout_runs(const skb_layout_t* layout)
 {
 	assert(layout);
-	return layout->layout_runs;
+	if (!layout->row_pieces_count) return layout->layout_runs;
+	if (!layout->row_cache->runs) {
+		layout->row_cache->runs = skb_malloc((size_t)layout->layout_runs_count * sizeof(*layout->row_cache->runs));
+		for (int32_t i = 0; i < layout->layout_runs_count; ++i)
+			layout->row_cache->runs[i] = skb_layout_get_layout_run_at(layout, i);
+	}
+	return layout->row_cache->runs;
 }
 
 skb_layout_run_t skb_layout_get_layout_run_at(const skb_layout_t* layout, int32_t index)
 {
 	assert(layout && index >= 0 && index < layout->layout_runs_count);
-	return layout->layout_runs[index];
+	if (!layout->row_pieces_count) return layout->layout_runs[index];
+	const skb__row_piece_t* piece = skb__row_piece_at(layout, index);
+	skb_layout_run_t run = piece->block->runs[piece->source_start + index - piece->destination_start];
+	run.glyph_range.start += piece->text_delta; run.glyph_range.end += piece->text_delta;
+	run.cluster_range.start += piece->text_delta; run.cluster_range.end += piece->text_delta;
+	return run;
 }
 
 int32_t skb_layout_get_glyphs_count(const skb_layout_t* layout)
@@ -4233,13 +4414,26 @@ int32_t skb_layout_get_lines_count(const skb_layout_t* layout)
 const skb_layout_line_t* skb_layout_get_lines(const skb_layout_t* layout)
 {
 	assert(layout);
-	return layout->lines;
+	if (!layout->row_pieces_count) return layout->lines;
+	if (!layout->row_cache->lines) {
+		layout->row_cache->lines = skb_malloc((size_t)layout->lines_count * sizeof(*layout->row_cache->lines));
+		for (int32_t i = 0; i < layout->lines_count; ++i)
+			layout->row_cache->lines[i] = skb_layout_get_line_at(layout, i);
+	}
+	return layout->row_cache->lines;
 }
 
 skb_layout_line_t skb_layout_get_line_at(const skb_layout_t* layout, int32_t index)
 {
 	assert(layout && index >= 0 && index < layout->lines_count);
-	return layout->lines[index];
+	if (!layout->row_pieces_count) return layout->lines[index];
+	const skb__row_piece_t* piece = skb__row_piece_at(layout, index);
+	skb_layout_line_t line = piece->block->lines[piece->source_start + index - piece->destination_start];
+	line.text_range.start += piece->text_delta; line.text_range.end += piece->text_delta;
+	line.last_grapheme_offset += piece->text_delta;
+	const int32_t row_delta = piece->destination_start - piece->source_start;
+	line.layout_run_range.start += row_delta; line.layout_run_range.end += row_delta;
+	return line;
 }
 
 skb_attribute_set_t skb_layout_get_layout_run_attributes(const skb_layout_t* layout, const skb_layout_run_t* run)

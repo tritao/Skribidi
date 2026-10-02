@@ -61,6 +61,24 @@ typedef struct skb__shape_cache_t {
 	skb_cluster_t* clusters;
 } skb__shape_cache_t;
 
+// Immutable one-run-per-row metadata; ownership is independent of shape blocks.
+typedef struct skb__row_block_t {
+	int32_t references, count;
+	skb_layout_line_t* lines;
+	skb_layout_run_t* runs;
+} skb__row_block_t;
+
+typedef struct skb__row_piece_t {
+	skb__row_block_t* block;
+	int32_t source_start, destination_start, count;
+	int32_t text_delta;
+} skb__row_piece_t;
+
+typedef struct skb__row_cache_t {
+	skb_layout_line_t* lines;
+	skb_layout_run_t* runs;
+} skb__row_cache_t;
+
 typedef struct skb_layout_t {
 	skb_layout_params_t params;	// Note: params has 'base_attributes' slice which points to attributes in the 'attributes' array.
 	uint64_t generation;		// Changes whenever the layout content or parameters are rebuilt.
@@ -115,6 +133,11 @@ typedef struct skb_layout_t {
 	skb_decoration_t* decorations;
 	int32_t decorations_count;
 	int32_t decorations_cap;
+
+	skb__row_block_t* row_block;
+	skb__row_piece_t* row_pieces;
+	int32_t row_pieces_count, row_pieces_cap;
+	skb__row_cache_t* row_cache;
 
 	skb__shape_block_t* shape_block;
 	skb__shape_piece_t* shape_pieces;

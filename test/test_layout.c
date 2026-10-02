@@ -476,11 +476,61 @@ static int test_incremental_row_work(void)
 	return 0;
 }
 
+static int test_shared_rows(void)
+{
+	skb_temp_alloc_t* temp = skb_temp_alloc_create(1024);
+	skb_font_collection_t* fonts = skb_font_collection_create();
+	ENSURE(skb_font_collection_add_font(fonts, "data/IBMPlexMono-Regular.ttf", SKB_FONT_FAMILY_DEFAULT, NULL));
+	const skb_attribute_t attrs[] = {skb_attribute_make_font_size(15.f), skb_attribute_make_text_wrap(SKB_WRAP_WORD_CHAR)};
+	skb_layout_params_t params = {.font_collection = fonts, .layout_width = 43.f,
+		.layout_attributes = SKB_ATTRIBUTE_SET_FROM_STATIC_ARRAY(attrs)};
+	char text[4097]; memset(text, 'a', 4096); text[4096] = 0;
+	skb_layout_t* original = skb_layout_create_utf8(temp, &params, text, -1, (skb_attribute_set_t){0});
+	skb_layout_t* edited = skb_layout_create_ascii_edit(original, temp, 256, 257, "w", 1);
+	ENSURE(edited && edited->row_pieces_count > 0);
+	ENSURE(!edited->lines && !edited->layout_runs);
+	ENSURE(edited->row_pieces[0].block == original->row_block);
+	ENSURE(edited->row_pieces[edited->row_pieces_count - 1].block == original->row_block);
+	ENSURE(!edited->row_cache->lines && !edited->row_cache->runs);
+	skb_layout_add_ellipsis_to_last_line(original);
+	skb_layout_set_utf8(original, temp, &params, "UPPERCASE", -1, (skb_attribute_set_t){0});
+	skb_layout_destroy(original);
+	skb_layout_t* child = skb_layout_create_ascii_edit(edited, temp, 512, 513, "c", 1);
+	ENSURE(child && !child->lines && !child->layout_runs);
+	skb_layout_add_ellipsis_to_last_line(edited);
+	skb_layout_destroy(edited);
+	text[256] = 'w'; text[512] = 'c';
+	skb_layout_t* fresh = skb_layout_create_utf8(temp, &params, text, -1, (skb_attribute_set_t){0});
+	ENSURE(fresh && child->lines_count == fresh->lines_count);
+	for (int row = 0; row < fresh->lines_count; ++row) {
+		const skb_layout_line_t a = skb_layout_get_line_at(child, row), b = skb_layout_get_line_at(fresh, row);
+		ENSURE(a.text_range.start == b.text_range.start && a.text_range.end == b.text_range.end);
+		ENSURE(a.baseline == b.baseline && a.bounds.x == b.bounds.x && a.bounds.y == b.bounds.y);
+		ENSURE(a.culling_bounds.x == b.culling_bounds.x && a.culling_bounds.width == b.culling_bounds.width);
+		const skb_layout_run_t x = skb_layout_get_layout_run_at(child, row), y = skb_layout_get_layout_run_at(fresh, row);
+		ENSURE(x.glyph_range.start == y.glyph_range.start && x.glyph_range.end == y.glyph_range.end);
+	}
+	for (int i = 0; i < 4096; ++i) {
+		const skb_glyph_t a = skb_layout_get_glyph_at(child, i), b = skb_layout_get_glyph_at(fresh, i);
+		ENSURE(a.gid == b.gid && a.offset_x == b.offset_x && a.offset_y == b.offset_y);
+	}
+	ENSURE(!child->row_cache->lines && !child->row_cache->runs);
+	const skb_layout_line_t* lines = skb_layout_get_lines(child);
+	const skb_layout_run_t* runs = skb_layout_get_layout_runs(child);
+	ENSURE(lines && runs && child->row_cache->lines && child->row_cache->runs);
+	ENSURE(!child->lines && !child->layout_runs);
+	ENSURE(lines[512 / 4].text_range.start == skb_layout_get_line_at(child, 512 / 4).text_range.start);
+	skb_layout_destroy(child); skb_layout_destroy(fresh);
+	skb_font_collection_destroy(fonts); skb_temp_alloc_destroy(temp);
+	return 0;
+}
+
 int layout_tests(void)
 {
 	RUN_SUBTEST(test_init);
 	RUN_SUBTEST(test_indexed_changed_wrap);
 	RUN_SUBTEST(test_incremental_row_work);
+	RUN_SUBTEST(test_shared_rows);
 	RUN_SUBTEST(test_long_wrapped_word);
 	RUN_SUBTEST(test_missing_script);
 	RUN_SUBTEST(test_render_glyph_iterator);
