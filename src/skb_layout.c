@@ -36,11 +36,14 @@ typedef struct skb__layout_build_context_t {
 	const skb_layout_t* reusable_culling_layout;
 	int32_t culling_edit_start;
 	int32_t culling_edit_end;
-	bool culling_equal_length;
+	bool incremental_rows;
+	int32_t edit_delta;
 } skb__layout_build_context_t;
 
 
 static void skb__materialize_shape_for_reflow(skb_layout_t* layout, bool positions);
+static bool skb__verify_ascii_shape(const skb_layout_t* layout);
+static bool skb__verify_indexed_ascii_rows(const skb_layout_t* layout);
 
 static void skb__release_shape_block(skb__shape_block_t* block)
 {
@@ -61,6 +64,8 @@ static void skb__retain_flat_shape(skb_layout_t* layout)
 		.glyphs = layout->glyphs, .clusters = layout->clusters,
 	};
 	layout->shape_block = block;
+	layout->ascii_shape_valid = skb__verify_ascii_shape(layout);
+	layout->ascii_rows_valid = layout->ascii_shape_valid && skb__verify_indexed_ascii_rows(layout);
 }
 
 static void skb__release_shape_pieces(skb_layout_t* layout)
@@ -1075,6 +1080,11 @@ static skb_layout_line_t* skb__add_line(skb_layout_t* layout)
 
 static void skb__update_glyph_range(const skb_layout_t* layout, skb_layout_run_t* layout_run)
 {
+	if (layout->shape_pieces_count) {
+		// Indexed ASCII shapes have one glyph per logical cluster.
+		layout_run->glyph_range = layout_run->cluster_range;
+		return;
+	}
 	if (layout_run->cluster_range.start != layout_run->cluster_range.end) {
 		// Clusters are kept in logical order while glyphs are kept in visual
 		// order. For right-to-left text, the first and last logical clusters
@@ -1932,6 +1942,34 @@ static bool skb__finalize_line(skb_layout_t* layout, skb_layout_line_t* line, bo
 	return false;
 }
 
+// Reuse checked row metrics without repeating font work for unchanged rows.
+static void skb__append_reflow_row(skb_layout_t* layout, const skb_layout_t* old,
+	int32_t source_row, int32_t delta, skb__calculated_layout_size_t* size)
+{
+	const int32_t row = layout->lines_count, run_index = layout->layout_runs_count;
+	SKB_ARRAY_RESERVE(layout->lines, row + 1);
+	SKB_ARRAY_RESERVE(layout->layout_runs, run_index + 1);
+	skb_layout_line_t* line = &layout->lines[layout->lines_count++];
+	skb_layout_run_t* run = &layout->layout_runs[layout->layout_runs_count++];
+	*line = old->lines[source_row];
+	*run = old->layout_runs[source_row];
+	line->text_range.start += delta; line->text_range.end += delta;
+	line->last_grapheme_offset += delta;
+	line->layout_run_range = (skb_range_t){run_index, run_index + 1};
+	line->padding_left = line->padding_right = 0.f;
+	run->glyph_range.start += delta; run->glyph_range.end += delta;
+	run->cluster_range.start += delta; run->cluster_range.end += delta;
+	// The incremental guard requires alphabetic, unshifted, unpadded font metrics.
+	run->bounds.y = line->ascender;
+	run->ref_baseline = 0.f;
+	size->height += line->bounds.height;
+	size->width = skb_maxf(size->width, line->bounds.width);
+	if (!row) {
+		const skb_font_t* font = skb_font_collection_get_font(layout->params.font_collection, run->font_handle);
+		size->first_line_cap_height = font->metrics.cap_height * run->font_size;
+	}
+}
+
 static bool skb__equals_inline_padding(const skb_attribute_inline_padding_t* a, const skb_attribute_inline_padding_t* b)
 {
 	return skb_equalsf(a->start, b->start, 1e-6f)
@@ -2231,6 +2269,8 @@ static void skb__build_decorations_for_line(skb_layout_t* layout, int32_t line_i
 
 void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t* layout)
 {
+	layout->reflow_measured_clusters = 0;
+	layout->reflowed_rows = layout->reused_prefix_rows = layout->reused_suffix_rows = 0;
 	const bool ignore_must_breaks = layout->params.flags & SKB_LAYOUT_PARAMS_IGNORE_MUST_LINE_BREAKS;
 	const bool has_width_constraint = layout->params.layout_width >= 0.f;
 	const bool has_height_constraint = layout->params.layout_height >= 0.f;
@@ -2279,6 +2319,24 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 	// Init the line break width to the first line width (will be reset to inner_layout_width after first line).
 	float line_break_width = skb_maxf(0.f, inner_layout_width - indent_increment.first_line_increment);
 
+	if (build_context->incremental_rows) {
+		const skb_layout_t* old = build_context->reusable_culling_layout;
+		int32_t lo = 0, hi = old->lines_count;
+		while (lo < hi) {
+			const int32_t mid = lo + (hi - lo) / 2;
+			if (old->lines[mid].text_range.end <= build_context->culling_edit_start) lo = mid + 1;
+			else hi = mid;
+		}
+		// The initial empty row has no content and may be replaced by the prefix.
+		layout->lines_count = 0;
+		for (int32_t row = 0; row < lo; ++row)
+			skb__append_reflow_row(layout, old, row, 0, &calculated_size);
+		layout->reused_prefix_rows = lo;
+		cur_line = skb__add_line(layout);
+		it.cluster_idx = lo < old->lines_count ? old->lines[lo].text_range.start : 0;
+		if (lo) line_break_width = inner_layout_width;
+	}
+
 	// Retain lookahead for a word split over several lines. Scanning the whole
 	// remaining word on every split makes character wrapping quadratic.
 	bool has_word_remainder = false;
@@ -2288,6 +2346,31 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 	bool word_must_break = false;
 
 	while (skb__shaping_run_cluster_iter_is_valid(&it, layout) && !max_heigh_reached) {
+		if (build_context->incremental_rows && !has_word_remainder &&
+			it.cluster_idx >= build_context->culling_edit_end + build_context->edit_delta) {
+			const skb_layout_t* old = build_context->reusable_culling_layout;
+			const int32_t source = it.cluster_idx - build_context->edit_delta;
+			int32_t lo = 0, hi = old->lines_count;
+			while (lo < hi) {
+				const int32_t mid = lo + (hi - lo) / 2;
+				if (old->lines[mid].text_range.start < source) lo = mid + 1;
+				else hi = mid;
+			}
+			const bool empty = skb_range_is_empty(cur_line->layout_run_range);
+			const int32_t completed_rows = layout->lines_count - (empty ? 1 : 0);
+			const bool begins_row = empty || cur_line->bounds.width +
+				skb__layout_shape_glyph_at(layout, it.cluster_idx).advance_x > line_break_width;
+			if (lo < old->lines_count && old->lines[lo].text_range.start == source &&
+				lo == completed_rows && begins_row) {
+				if (empty) --layout->lines_count;
+				else skb__finalize_line(layout, cur_line, false, NULL, line_break_width, &calculated_size);
+				for (int32_t row = lo; row < old->lines_count; ++row)
+					skb__append_reflow_row(layout, old, row, build_context->edit_delta, &calculated_size);
+				layout->reused_suffix_rows = old->lines_count - lo;
+				cur_line = NULL;
+				break;
+			}
+		}
 		// Calc run up to the next line break.
 		skb__shaping_run_cluster_iter_t start_it = it;
 		skb__shaping_run_cluster_iter_t end_it = it;
@@ -2309,10 +2392,12 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 		while (!has_word_remainder && skb__shaping_run_cluster_iter_is_valid(&end_it, layout)) {
 
 			// Advance whole glyph cluster, cannot split in between.
+			++layout->reflow_measured_clusters;
 			const skb_cluster_t cluster = skb__layout_cluster_at(layout, end_it.cluster_idx);
 			float cluster_width = skb__get_cluster_width(layout, end_it.shaping_run_idx, end_it.cluster_idx);
 
 			const int cp_offset = cluster.text_offset + cluster.text_count - 1;
+			const uint8_t text_flags = skb__layout_text_property_at(layout, cp_offset).flags;
 
 			// Handle tabs
 			bool codepoint_is_tab = false;
@@ -2343,8 +2428,8 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 			// When the direction does not match, the space will be inside the line (not end of it), so we ignore that.
 			// Treat tab as non-whitespace so that it allocates space at the end of the line too.
 			const bool codepoint_is_rtl = skb_is_rtl(layout->shaping_runs[end_it.shaping_run_idx].direction);
-			const bool codepoint_is_whitespace = (skb__layout_text_property_at(layout, cp_offset).flags & SKB_TEXT_PROP_WHITESPACE);
-			const bool codepoint_is_control = (skb__layout_text_property_at(layout, cp_offset).flags & SKB_TEXT_PROP_CONTROL);
+			const bool codepoint_is_whitespace = (text_flags & SKB_TEXT_PROP_WHITESPACE);
+			const bool codepoint_is_control = (text_flags & SKB_TEXT_PROP_CONTROL);
 			if (codepoint_is_rtl == layout_is_rtl && (codepoint_is_whitespace || codepoint_is_control) && !codepoint_is_tab) {
 				run_end_whitespace_width += cluster_width;
 			} else {
@@ -2360,11 +2445,13 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 			// Advance to next cluster.
 			skb__shaping_run_cluster_iter_next(&end_it, layout);
 
-			if (skb__layout_text_property_at(layout, cp_offset).flags & SKB_TEXT_PROP_MUST_LINE_BREAK) {
+			if (text_flags & SKB_TEXT_PROP_MUST_LINE_BREAK) {
 				must_break = true;
 				break;
 			}
-			if (skb__layout_text_property_at(layout, cp_offset).flags & SKB_TEXT_PROP_ALLOW_LINE_BREAK)
+			if (text_flags & SKB_TEXT_PROP_ALLOW_LINE_BREAK)
+				break;
+			if (build_context->incremental_rows && measured_word_width > 2.0 * line_break_width)
 				break;
 		}
 
@@ -2450,6 +2537,8 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 	// Finalize last line
 	if (cur_line)
 		max_heigh_reached = skb__finalize_line(layout, cur_line, true, list_marker, line_break_width, &calculated_size);
+
+	layout->reflowed_rows = layout->lines_count - layout->reused_prefix_rows - layout->reused_suffix_rows;
 
 	//
 	// Align layout and lines
@@ -2586,14 +2675,18 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 				cur_x += layout_run->padding.left;
 			}
 
-			for (int32_t j = layout_run->glyph_range.start; j < layout_run->glyph_range.end; j++) {
-				const float advance = skb__layout_shape_glyph_at(layout, j).advance_x;
-				if (!layout->shape_pieces_count) {
-					layout->glyphs[j].offset_x += cur_x;
-					layout->glyphs[j].offset_y += line->baseline;
+			if (layout->shape_pieces_count) {
+				assert(line->layout_run_range.end - line->layout_run_range.start == 1);
+				cur_x += line->bounds.width;
+				layout_run->bounds.width += line->bounds.width;
+			} else {
+				for (int32_t j = layout_run->glyph_range.start; j < layout_run->glyph_range.end; j++) {
+					skb_glyph_t* glyph = &layout->glyphs[j];
+					glyph->offset_x += cur_x;
+					glyph->offset_y += line->baseline;
+					cur_x += glyph->advance_x;
+					layout_run->bounds.width += glyph->advance_x;
 				}
-				cur_x += advance;
-				layout_run->bounds.width += advance;
 			}
 
 			if (layout_run->flags & SKB_LAYOUT_RUN_IS_LIST_MARKER) {
@@ -2641,14 +2734,14 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 		skb_layout_line_t* line = &layout->lines[li];
 		// Guarded ASCII edits leave glyphs and font untouched before the edit,
 		// and after an equal-length edit. Retain exact bounds only for matching rows.
+		const bool prefix = line->text_range.end <= build_context->culling_edit_start;
+		const bool suffix = line->text_range.start >= build_context->culling_edit_end + build_context->edit_delta;
+		const int32_t source_delta = suffix ? build_context->edit_delta : 0;
 		if (build_context->reusable_culling_layout &&
-			li < build_context->reusable_culling_layout->lines_count &&
-			(line->text_range.end < build_context->culling_edit_start ||
-				(build_context->culling_equal_length &&
-				 line->text_range.start > build_context->culling_edit_end))) {
+			li < build_context->reusable_culling_layout->lines_count && (prefix || suffix)) {
 			const skb_layout_line_t* previous = &build_context->reusable_culling_layout->lines[li];
-			if (line->text_range.start == previous->text_range.start &&
-				line->text_range.end == previous->text_range.end &&
+			if (line->text_range.start == previous->text_range.start + source_delta &&
+				line->text_range.end == previous->text_range.end + source_delta &&
 				line->baseline == previous->baseline &&
 				line->bounds.x == previous->bounds.x &&
 				line->bounds.y == previous->bounds.y &&
@@ -3045,6 +3138,9 @@ void skb_layout_set_utf32(skb_layout_t* layout, skb_temp_alloc_t* temp_alloc, co
 void skb_layout_reset(skb_layout_t* layout)
 {
 	assert(layout);
+	layout->ascii_shape_valid = layout->ascii_rows_valid = false;
+	layout->reflow_measured_clusters = 0;
+	layout->reflowed_rows = layout->reused_prefix_rows = layout->reused_suffix_rows = 0;
 	skb__detach_shape(layout, true);
 
 	layout->params = (skb_layout_params_t){0};
@@ -3381,7 +3477,7 @@ void skb_layout_set_from_runs(skb_layout_t* layout, skb_temp_alloc_t* temp_alloc
 	SKB_TEMP_FREE(build_context.temp_alloc, text_counts);
 }
 
-static bool skb__one_ascii_glyph_per_codepoint(const skb_layout_t* layout)
+static bool skb__verify_ascii_shape(const skb_layout_t* layout)
 {
 	if (layout->content_runs_count != 1 || layout->shaping_runs_count != 1 ||
 		layout->resolved_direction != SKB_DIRECTION_LTR ||
@@ -3397,8 +3493,6 @@ static bool skb__one_ascii_glyph_per_codepoint(const skb_layout_t* layout)
 		run->direction != SKB_DIRECTION_LTR || run->is_emoji ||
 		run->has_baseline_shift || layout->lines_count <= 0)
 		return false;
-	// Indexed roots are created only from already validated roots and windows.
-	if (layout->shape_pieces_count) return true;
 	int32_t expected = 0;
 	for (int32_t row = 0; row < layout->lines_count; ++row) {
 		const skb_layout_line_t* line = &layout->lines[row];
@@ -3420,6 +3514,12 @@ static bool skb__one_ascii_glyph_per_codepoint(const skb_layout_t* layout)
 		expected = line->text_range.end;
 	}
 	return expected == layout->text_count;
+}
+
+static bool skb__one_ascii_glyph_per_codepoint(const skb_layout_t* layout)
+{
+	return layout->ascii_shape_valid && layout->text_count == layout->glyphs_count &&
+		layout->text_count == layout->clusters_count && layout->lines_count > 0;
 }
 
 static bool skb__same_ascii_seam(const skb_layout_t* old, int32_t old_index,
@@ -3599,7 +3699,7 @@ static bool skb__reuse_ascii_rows_with_stable_breaks(skb_layout_t* next,
 	return true;
 }
 
-static bool skb__can_index_ascii_rows(const skb_layout_t* layout)
+static bool skb__verify_indexed_ascii_rows(const skb_layout_t* layout)
 {
 	if (layout->layout_runs_count != layout->lines_count ||
 		layout->decorations_count != 0 || layout->flags != 0)
@@ -3616,6 +3716,12 @@ static bool skb__can_index_ascii_rows(const skb_layout_t* layout)
 			return false;
 	}
 	return true;
+}
+
+static bool skb__can_index_ascii_rows(const skb_layout_t* layout)
+{
+	return layout->ascii_rows_valid && layout->layout_runs_count == layout->lines_count &&
+		layout->decorations_count == 0 && layout->flags == 0;
 }
 
 static void skb__materialize_shape_for_reflow(skb_layout_t* layout, bool positions)
@@ -3693,7 +3799,8 @@ skb_layout_t* skb_layout_create_ascii_edit(const skb_layout_t* layout, skb_temp_
 		window_text, window_count, text_attributes);
 	skb_free(window_text);
 	if (!window || !skb__one_ascii_glyph_per_codepoint(window) ||
-		window->shaping_runs[0].font_handle != layout->shaping_runs[0].font_handle) {
+		window->shaping_runs[0].font_handle != layout->shaping_runs[0].font_handle ||
+		window->shaping_runs[0].font_size != layout->shaping_runs[0].font_size) {
 		skb_layout_destroy(window);
 		return NULL;
 	}
@@ -3755,17 +3862,44 @@ skb_layout_t* skb_layout_create_ascii_edit(const skb_layout_t* layout, skb_temp_
 	skb__layout_build_context_t build_context = {0};
 	build_context.temp_alloc = temp_alloc;
 	build_context.reusable_culling_layout = layout;
-	build_context.culling_edit_start = start;
-	build_context.culling_edit_end = end;
-	build_context.culling_equal_length = delta == 0;
-	const bool reused_lines = skb__can_index_ascii_rows(layout) && (delta == 0
-		? skb__reuse_ascii_line_geometry(next, layout, window, context_start)
-		: skb__reuse_ascii_rows_with_stable_breaks(next, layout, window, delta));
+	build_context.culling_edit_start = context_start;
+	build_context.culling_edit_end = context_end;
+	build_context.edit_delta = delta;
+	const bool can_index = skb__can_index_ascii_rows(layout) && skb__can_index_ascii_rows(window);
 	const skb_text_overflow_t overflow = skb_attributes_get_text_overflow(
 		layout->params.layout_attributes, layout->params.attribute_collection);
-	const bool indexed_reflow = skb__can_index_ascii_rows(layout) &&
+	const bool indexed_reflow = can_index &&
 		((layout->params.flags & SKB_LAYOUT_PARAMS_IGNORE_OVERFLOW) ||
 		 overflow == SKB_OVERFLOW_NONE || overflow == SKB_OVERFLOW_SCROLL);
+	const skb_attribute_paragraph_padding_t paragraph_padding = skb_attributes_get_paragraph_padding(
+		layout->params.layout_attributes, layout->params.attribute_collection);
+	const skb_attribute_indent_increment_t indent = skb_attributes_get_indent_increment(
+		layout->params.layout_attributes, layout->params.attribute_collection);
+	const skb_align_t align = skb_attributes_get_horizontal_align(
+		layout->params.layout_attributes, layout->params.attribute_collection);
+	build_context.incremental_rows = indexed_reflow && layout->params.layout_width > 0.f &&
+		skb_attributes_get_text_wrap(layout->params.layout_attributes, layout->params.attribute_collection) == SKB_WRAP_WORD_CHAR &&
+		(align == SKB_ALIGN_START || align == SKB_ALIGN_LEFT) &&
+		paragraph_padding.start == 0.f && paragraph_padding.end == 0.f &&
+		indent.first_line_increment == 0.f && indent.level_increment == 0.f &&
+		skb_attributes_get_indent_level(layout->params.layout_attributes, layout->params.attribute_collection) == 0;
+	if (build_context.incremental_rows) {
+		const skb_layout_line_t* first_line = &layout->lines[0];
+		const skb_layout_run_t* first_run = &layout->layout_runs[0];
+		const skb_font_t* font = skb_font_collection_get_font(layout->params.font_collection, first_run->font_handle);
+		const float ascender = font->metrics.ascender * first_run->font_size;
+		const float descender = font->metrics.descender * first_run->font_size;
+		build_context.incremental_rows = ascender <= 0.f && descender >= 0.f &&
+			skb_attributes_get_baseline_align(layout->params.layout_attributes, layout->params.attribute_collection) == SKB_BASELINE_ALPHABETIC &&
+			first_run->padding.top == 0.f && first_run->padding.bottom == 0.f &&
+			first_line->ascender == ascender && first_line->descender == descender;
+	}
+	const bool same_metrics = window->lines[0].bounds.height == layout->lines[0].bounds.height &&
+		window->lines[0].ascender == layout->lines[0].ascender && window->lines[0].descender == layout->lines[0].descender;
+	build_context.incremental_rows = build_context.incremental_rows && same_metrics;
+	const bool reused_lines = can_index && same_metrics && (delta == 0
+		? skb__reuse_ascii_line_geometry(next, layout, window, context_start)
+		: (!build_context.incremental_rows && skb__reuse_ascii_rows_with_stable_breaks(next, layout, window, delta)));
 	if (!reused_lines && indexed_reflow) {
 		// Immutable shape data supplies advances; finalized rows own positions.
 		skb__layout_lines(&build_context, next);
@@ -3779,6 +3913,11 @@ skb_layout_t* skb_layout_create_ascii_edit(const skb_layout_t* layout, skb_temp_
 		}
 		skb__layout_lines(&build_context, next);
 		skb__retain_flat_shape(next);
+	}
+	if (next->shape_pieces_count) {
+		// The source and local window are checked; indexed construction preserves their invariants.
+		next->ascii_shape_valid = true;
+		next->ascii_rows_valid = true;
 	}
 	next->generation = layout->generation == UINT64_MAX ? 1 : layout->generation + 1;
 	skb_layout_destroy(window);

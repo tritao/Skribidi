@@ -64,6 +64,9 @@ typedef struct skb__shape_cache_t {
 typedef struct skb_layout_t {
 	skb_layout_params_t params;	// Note: params has 'base_attributes' slice which points to attributes in the 'attributes' array.
 	uint64_t generation;		// Changes whenever the layout content or parameters are rebuilt.
+	uint64_t reflow_measured_clusters; // Internal work evidence for wrapping only.
+	int32_t reflowed_rows, reused_prefix_rows, reused_suffix_rows;
+	bool ascii_shape_valid, ascii_rows_valid; // Computed when a snapshot is installed.
 
 	skb_rect2_t bounds;
 	skb_padding2_t padding;

@@ -419,10 +419,60 @@ static int test_indexed_changed_wrap(void)
 	return 0;
 }
 
+static int test_incremental_row_work(void)
+{
+	skb_temp_alloc_t* temp = skb_temp_alloc_create(1024);
+	skb_font_collection_t* fonts = skb_font_collection_create();
+	ENSURE(skb_font_collection_add_font(fonts, "data/IBMPlexSans-Regular.ttf", SKB_FONT_FAMILY_DEFAULT, NULL));
+	const skb_attribute_t attrs[] = {skb_attribute_make_font_size(15.f), skb_attribute_make_text_wrap(SKB_WRAP_WORD_CHAR)};
+	skb_layout_params_t params = {.font_collection = fonts, .layout_width = 43.f,
+		.layout_attributes = SKB_ATTRIBUTE_SET_FROM_STATIC_ARRAY(attrs)};
+	char text[4113]; memset(text, 'b', 4096); text[4096] = 0; text[260] = 'w';
+	skb_layout_t* original = skb_layout_create_utf8(temp, &params, text, -1, (skb_attribute_set_t){0});
+	ENSURE(original);
+	skb_layout_t* edited = skb_layout_create_ascii_edit(original, temp, 256, 264, "wbbb bbb", 8);
+	ENSURE(!edited); // Whitespace remains outside the guarded ASCII contract.
+	edited = skb_layout_create_ascii_edit(original, temp, 256, 264, "wbbbbbbb", 8);
+	ENSURE(edited);
+	// The equal-length exchange recovers the unchanged suffix boundary.
+	memcpy(text + 256, "wbbbbbbb", 8);
+	skb_layout_t* fresh = skb_layout_create_utf8(temp, &params, text, -1, (skb_attribute_set_t){0});
+	ENSURE(fresh && edited->lines_count == fresh->lines_count);
+	ENSURE(edited->reused_prefix_rows > 0 && edited->reused_suffix_rows > 0);
+	ENSURE(edited->reflowed_rows < 20 && edited->reflow_measured_clusters < 256);
+	printf("incremental rows: %d prefix, %d reflowed, %d suffix, %llu measured clusters\n",
+		edited->reused_prefix_rows, edited->reflowed_rows, edited->reused_suffix_rows,
+		(unsigned long long)edited->reflow_measured_clusters);
+	for (int i = 0; i < 4096; ++i) {
+		const skb_glyph_t a = skb_layout_get_glyph_at(edited, i), b = skb_layout_get_glyph_at(fresh, i);
+		ENSURE(a.gid == b.gid && fabsf(a.offset_x - b.offset_x) < .001f && fabsf(a.offset_y - b.offset_y) < .001f);
+	}
+	// A row-count change must not claim convergence at the old vertical positions.
+	skb_layout_t* tail = skb_layout_create_ascii_edit(original, temp, 2048, 2048, "wwwwwwww", 8);
+	ENSURE(tail && tail->reused_prefix_rows > 0 && tail->reused_suffix_rows == 0);
+	memset(text, 'b', 4096); text[4096] = 0; text[260] = 'w';
+	memmove(text + 2056, text + 2048, 2049); memcpy(text + 2048, "wwwwwwww", 8);
+	skb_layout_t* tail_fresh = skb_layout_create_utf8(temp, &params, text, -1, (skb_attribute_set_t){0});
+	ENSURE(tail_fresh && tail->lines_count == tail_fresh->lines_count);
+	for (int i = 0; i < 4104; ++i) {
+		const skb_glyph_t a = skb_layout_get_glyph_at(tail, i), b = skb_layout_get_glyph_at(tail_fresh, i);
+		ENSURE(a.gid == b.gid && fabsf(a.offset_x - b.offset_x) < .001f && fabsf(a.offset_y - b.offset_y) < .001f);
+	}
+	skb_layout_destroy(tail); skb_layout_destroy(tail_fresh);
+	ENSURE(original->ascii_shape_valid && original->ascii_rows_valid);
+	skb_layout_set_utf8(original, temp, &params, "UPPERCASE", -1, (skb_attribute_set_t){0});
+	ENSURE(!original->ascii_shape_valid && !original->ascii_rows_valid);
+	ENSURE(!skb_layout_create_ascii_edit(original, temp, 0, 1, "b", 1));
+	skb_layout_destroy(original); skb_layout_destroy(edited); skb_layout_destroy(fresh);
+	skb_font_collection_destroy(fonts); skb_temp_alloc_destroy(temp);
+	return 0;
+}
+
 int layout_tests(void)
 {
 	RUN_SUBTEST(test_init);
 	RUN_SUBTEST(test_indexed_changed_wrap);
+	RUN_SUBTEST(test_incremental_row_work);
 	RUN_SUBTEST(test_long_wrapped_word);
 	RUN_SUBTEST(test_missing_script);
 	RUN_SUBTEST(test_render_glyph_iterator);
