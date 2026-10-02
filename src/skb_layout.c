@@ -3653,6 +3653,26 @@ const skb_text_property_t* skb_layout_get_text_properties(const skb_layout_t* la
 	return layout->text_props;
 }
 
+uint32_t skb_layout_get_text_at(const skb_layout_t* layout, int32_t index)
+{
+	return skb__layout_text_at(layout, index);
+}
+
+skb_text_property_t skb_layout_get_text_property_at(const skb_layout_t* layout, int32_t index)
+{
+	return skb__layout_text_property_at(layout, index);
+}
+
+skb_glyph_t skb_layout_get_glyph_at(const skb_layout_t* layout, int32_t index)
+{
+	return skb__layout_glyph_at(layout, index);
+}
+
+skb_cluster_t skb_layout_get_cluster_at(const skb_layout_t* layout, int32_t index)
+{
+	return skb__layout_cluster_at(layout, index);
+}
+
 int32_t skb_layout_get_layout_runs_count(const skb_layout_t* layout)
 {
 	assert(layout);
@@ -3702,10 +3722,12 @@ bool skb_layout_iterate_render_glyphs_range(const skb_layout_t* layout, skb_rang
 				SKB_PAINT_TEXT, SKB_PAINT_STATE_DEFAULT, attributes, layout->params.attribute_collection);
 
 			for (int32_t glyph_idx = run->glyph_range.start; glyph_idx < run->glyph_range.end; glyph_idx++) {
-				const skb_glyph_t* source = &layout->glyphs[glyph_idx];
+				const skb_glyph_t source_value = skb__layout_glyph_at(layout, glyph_idx);
+				const skb_glyph_t* source = &source_value;
 				skb_range_t text_range = {0, 0};
 				if (source->cluster_idx >= 0 && source->cluster_idx < layout->clusters_count) {
-					const skb_cluster_t* cluster = &layout->clusters[source->cluster_idx];
+					const skb_cluster_t cluster_value = skb__layout_cluster_at(layout, source->cluster_idx);
+					const skb_cluster_t* cluster = &cluster_value;
 					text_range.start = cluster->text_offset;
 					text_range.end = cluster->text_offset + cluster->text_count;
 				}
@@ -3897,7 +3919,7 @@ int32_t skb_layout_get_next_grapheme_offset(const skb_layout_t* layout, int32_t 
 	text_offset = skb_clampi(text_offset, 0, layout->text_count); // We allow one past the last codepoint as valid insertion point.
 
 	// Find end of the current grapheme.
-	while (text_offset < layout->text_count && !(layout->text_props[text_offset].flags & SKB_TEXT_PROP_GRAPHEME_BREAK))
+	while (text_offset < layout->text_count && !(skb__layout_text_property_at(layout, text_offset).flags & SKB_TEXT_PROP_GRAPHEME_BREAK))
 		text_offset++;
 
 	if (text_offset >= layout->text_count)
@@ -3920,7 +3942,7 @@ int32_t skb_layout_get_prev_grapheme_offset(const skb_layout_t* layout, int32_t 
 
 	// Find begining of the current grapheme.
 	if (layout->text_count) {
-		while ((text_offset - 1) >= 0 && !(layout->text_props[text_offset - 1].flags & SKB_TEXT_PROP_GRAPHEME_BREAK))
+		while ((text_offset - 1) >= 0 && !(skb__layout_text_property_at(layout, text_offset - 1).flags & SKB_TEXT_PROP_GRAPHEME_BREAK))
 			text_offset--;
 	}
 
@@ -3931,7 +3953,7 @@ int32_t skb_layout_get_prev_grapheme_offset(const skb_layout_t* layout, int32_t 
 	text_offset--;
 
 	// Find beginning of the previous grapheme.
-	while ((text_offset - 1) >= 0 && !(layout->text_props[text_offset - 1].flags & SKB_TEXT_PROP_GRAPHEME_BREAK))
+	while ((text_offset - 1) >= 0 && !(skb__layout_text_property_at(layout, text_offset - 1).flags & SKB_TEXT_PROP_GRAPHEME_BREAK))
 		text_offset--;
 
 	return text_offset;
@@ -3948,7 +3970,7 @@ int32_t skb_layout_align_grapheme_offset(const skb_layout_t* layout, int32_t tex
 		return text_offset;
 
 	// Find beginning of the current grapheme.
-	while ((text_offset - 1) >= 0 && !(layout->text_props[text_offset - 1].flags & SKB_TEXT_PROP_GRAPHEME_BREAK))
+	while ((text_offset - 1) >= 0 && !(skb__layout_text_property_at(layout, text_offset - 1).flags & SKB_TEXT_PROP_GRAPHEME_BREAK))
 		text_offset--;
 
 	if (text_offset <= 0)
@@ -3964,7 +3986,7 @@ skb_text_position_t skb__caret_prune_control_eol(const skb_layout_t* layout, con
 		// If the caret is at the leading edge of a control character and the end of line, move it to trailing.
 		// This is used for selection, mouse drag can place the caret at the "forbidden" location, but mouse click should not.
 		if ((caret.affinity == SKB_AFFINITY_LEADING || caret.affinity == SKB_AFFINITY_EOL) && caret.offset == line->last_grapheme_offset) {
-			if (layout->text_props[line->last_grapheme_offset].flags & SKB_TEXT_PROP_CONTROL) {
+			if (skb__layout_text_property_at(layout, line->last_grapheme_offset).flags & SKB_TEXT_PROP_CONTROL) {
 				caret.affinity = SKB_AFFINITY_TRAILING;
 			}
 		}
@@ -4003,8 +4025,10 @@ static skb_range_t skb__get_layout_run_text_range(const skb_layout_t* layout, in
 	if (skb_range_is_empty(layout_run->cluster_range))
 		return (skb_range_t){0};
 
-	const skb_cluster_t* first_cluster = &layout->clusters[layout_run->cluster_range.start];
-	const skb_cluster_t* last_cluster = &layout->clusters[layout_run->cluster_range.end - 1];
+	const skb_cluster_t first_cluster_value = skb__layout_cluster_at(layout, layout_run->cluster_range.start);
+	const skb_cluster_t* first_cluster = &first_cluster_value;
+	const skb_cluster_t last_cluster_value = skb__layout_cluster_at(layout, layout_run->cluster_range.end - 1);
+	const skb_cluster_t* last_cluster = &last_cluster_value;
 	return (skb_range_t) {
 		.start = first_cluster->text_offset,
 		.end = last_cluster->text_offset + last_cluster->text_count,
@@ -4403,7 +4427,8 @@ skb_caret_info_t skb_layout_get_caret_info_at_line(const skb_layout_t* layout, i
 		const float font_size = layout_run->font_size;
 		const skb_font_handle_t font_handle = layout_run->font_handle;
 
-		const skb_glyph_t* glyph = &layout->glyphs[glyph_idx];
+		const skb_glyph_t glyph_value = skb__layout_glyph_at(layout, glyph_idx);
+		const skb_glyph_t* glyph = &glyph_value;
 		caret_info.y = glyph->offset_y;
 
 		if (font_handle) {
@@ -4480,7 +4505,7 @@ skb_text_position_t skb_layout_get_word_start_at(const skb_layout_t* layout, skb
 	int32_t offset = pos.offset;
 
 	while (offset > 0) {
-		if (layout->text_props[offset-1].flags & SKB_TEXT_PROP_WORD_BREAK) {
+		if (skb__layout_text_property_at(layout, offset-1).flags & SKB_TEXT_PROP_WORD_BREAK) {
 			offset = skb_layout_align_grapheme_offset(layout, offset);
 			break;
 		}
@@ -4512,7 +4537,7 @@ skb_text_position_t skb_layout_get_word_end_at(const skb_layout_t* layout, skb_t
 	int32_t offset = pos.offset;
 
 	while (offset < layout->text_count) {
-		if (layout->text_props[offset].flags & SKB_TEXT_PROP_WORD_BREAK) {
+		if (skb__layout_text_property_at(layout, offset).flags & SKB_TEXT_PROP_WORD_BREAK) {
 			offset = skb_layout_align_grapheme_offset(layout, offset);
 			break;
 		}
@@ -4614,13 +4639,14 @@ void skb_layout_iterate_text_range_bounds_with_offset(const skb_layout_t* layout
 				x += layout_run->padding.left;
 
 				for (int32_t ci = cluster_range.start; ci != cluster_range.end; ci += cluster_range_delta) {
-					const skb_cluster_t* cluster = &layout->clusters[ci];
+					const skb_cluster_t cluster_value = skb__layout_cluster_at(layout, ci);
+					const skb_cluster_t* cluster = &cluster_value;
 					const skb_range_t cluster_text_range = { .start = cluster->text_offset, .end = cluster->text_offset + cluster->text_count };
 					const skb_range_t cluster_glyph_range = { .start = cluster->glyphs_offset, .end = cluster->glyphs_offset + cluster->glyphs_count };
 
 					float cluster_width = 0.f;
 					for (int32_t gi = cluster_glyph_range.start; gi != cluster_glyph_range.end; gi++)
-						cluster_width += layout->glyphs[gi].advance_x;
+						cluster_width += skb__layout_glyph_at(layout, gi).advance_x;
 
 					skb_range_t selected_cluster_text_range = {
 						.start = skb_maxi(cluster_text_range.start, sel_range.start),
@@ -4640,7 +4666,7 @@ void skb_layout_iterate_text_range_bounds_with_offset(const skb_layout_t* layout
 								grapheme_start_idx = grapheme_count;
 							if (cp_offset == selected_cluster_text_range.end)
 								grapheme_end_idx = grapheme_count;
-							if (layout->text_props[cp_offset].flags & SKB_TEXT_PROP_GRAPHEME_BREAK)
+							if (skb__layout_text_property_at(layout, cp_offset).flags & SKB_TEXT_PROP_GRAPHEME_BREAK)
 								grapheme_count++;
 						}
 						if (selected_cluster_text_range.end == cluster_text_range.end)
@@ -4769,19 +4795,20 @@ static bool skb__init_cluster_iter(skb_caret_iterator_t* iter)
 	}
 
 	const skb_layout_run_t* cur_layout_run = &layout->layout_runs[iter->layout_run_idx];
-	const skb_cluster_t* cur_cluster = &layout->clusters[iter->cluster_idx];
+	const skb_cluster_t cur_cluster_value = skb__layout_cluster_at(layout, iter->cluster_idx);
+	const skb_cluster_t* cur_cluster = &cur_cluster_value;
 	skb_range_t text_range = { .start = cur_cluster->text_offset, .end = cur_cluster->text_offset + cur_cluster->text_count };
 	skb_range_t glyph_range = { .start = cur_cluster->glyphs_offset, .end = cur_cluster->glyphs_offset + cur_cluster->glyphs_count };
 
 	int32_t grapheme_count = 0;
 	for (int32_t ti = text_range.start; ti < text_range.end; ti++) {
-		if (layout->text_props[ti].flags & SKB_TEXT_PROP_GRAPHEME_BREAK)
+		if (skb__layout_text_property_at(layout, ti).flags & SKB_TEXT_PROP_GRAPHEME_BREAK)
 			grapheme_count++;
 	}
 
 	float cluster_width = 0.f;
 	for (int32_t gi = glyph_range.start; gi < glyph_range.end; gi++)
-		cluster_width += layout->glyphs[gi].advance_x;
+		cluster_width += skb__layout_glyph_at(layout, gi).advance_x;
 
 	iter->advance = (grapheme_count > 0) ? (cluster_width / (float)grapheme_count) : 0.f;
 

@@ -663,8 +663,14 @@ SKB_API uint64_t skb_layout_get_generation(const skb_layout_t* layout);
 SKB_API int32_t skb_layout_get_text_count(const skb_layout_t* layout);
 /** @return const pointer to the codepoints of the text. See skb_layout_get_text_count() to get text length. */
 SKB_API const uint32_t* skb_layout_get_text(const skb_layout_t* layout);
+/** Returns a value at a valid index; does not expose contiguous storage.
+ * layout must be non-NULL; index must be in the corresponding count range. */
+SKB_API uint32_t skb_layout_get_text_at(const skb_layout_t* layout, int32_t index);
 /** @return const pointer to the codepoint properties of the text. See skb_layout_get_text_count() to get text length. */
 SKB_API const skb_text_property_t* skb_layout_get_text_properties(const skb_layout_t* layout);
+/** Returns a value at a valid index; does not expose contiguous storage.
+ * layout must be non-NULL; index must be in the corresponding count range. */
+SKB_API skb_text_property_t skb_layout_get_text_property_at(const skb_layout_t* layout, int32_t index);
 
 /** @return number of layout runs in the layout. */
 SKB_API int32_t skb_layout_get_layout_runs_count(const skb_layout_t* layout);
@@ -675,6 +681,9 @@ SKB_API const skb_layout_run_t* skb_layout_get_layout_runs(const skb_layout_t* l
 SKB_API int32_t skb_layout_get_glyphs_count(const skb_layout_t* layout);
 /** @return const pointer to the glyphs. See skb_layout_get_glyphs_count() to get number of glyphs. */
 SKB_API const skb_glyph_t* skb_layout_get_glyphs(const skb_layout_t* layout);
+/** Returns a value at a valid index; does not expose contiguous storage.
+ * layout must be non-NULL; index must be in the corresponding count range. */
+SKB_API skb_glyph_t skb_layout_get_glyph_at(const skb_layout_t* layout, int32_t index);
 
 /**
  * Iterates shaped text in visual render order without exposing layout storage.
@@ -728,6 +737,9 @@ SKB_API bool skb_layout_prepare_glyphs_range(
 SKB_API int32_t skb_layout_get_clusters_count(const skb_layout_t* layout);
 /** @return const pointer to the clusters. See skb_layout_get_clusters_count() to get number of clusters. */
 SKB_API const skb_cluster_t* skb_layout_get_clusters(const skb_layout_t* layout);
+/** Returns a value at a valid index; does not expose contiguous storage.
+ * layout must be non-NULL; index must be in the corresponding count range. */
+SKB_API skb_cluster_t skb_layout_get_cluster_at(const skb_layout_t* layout, int32_t index);
 
 /** @return number of decorations in the layout. */
 SKB_API int32_t skb_layout_get_decorations_count(const skb_layout_t* layout);

@@ -4,6 +4,7 @@
 #ifndef SKB_LAYOUT_INTERNAL_H
 #define SKB_LAYOUT_INTERNAL_H
 
+#include <assert.h>
 #include <stdint.h>
 
 // Internal representation of a content run.
@@ -89,6 +90,32 @@ typedef struct skb_layout_t {
 
 	uint8_t should_free_instance;
 } skb_layout_t;
+
+// Indexed reads are the shared boundary for rendering and geometry. Values
+// never borrow an element address, allowing storage to become immutable pieces.
+static inline uint32_t skb__layout_text_at(const skb_layout_t* layout, int32_t index)
+{
+	assert(layout && index >= 0 && index < layout->text_count);
+	return layout->text[index];
+}
+
+static inline skb_text_property_t skb__layout_text_property_at(const skb_layout_t* layout, int32_t index)
+{
+	assert(layout && index >= 0 && index < layout->text_count);
+	return layout->text_props[index];
+}
+
+static inline skb_glyph_t skb__layout_glyph_at(const skb_layout_t* layout, int32_t index)
+{
+	assert(layout && index >= 0 && index < layout->glyphs_count);
+	return layout->glyphs[index];
+}
+
+static inline skb_cluster_t skb__layout_cluster_at(const skb_layout_t* layout, int32_t index)
+{
+	assert(layout && index >= 0 && index < layout->clusters_count);
+	return layout->clusters[index];
+}
 
 skb_layout_t skb_layout_make_empty(void);
 bool skb_layout_add_ellipsis_to_last_line(skb_layout_t* layout);
