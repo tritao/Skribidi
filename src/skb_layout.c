@@ -3308,7 +3308,7 @@ static bool skb__reuse_ascii_line_geometry(skb_layout_t* next, const skb_layout_
 	next->padding = old->padding;
 	next->advance_y = old->advance_y;
 	next->flags = old->flags;
-	for (int32_t i = 0; i < next->glyphs_count; ++i) {
+	for (int32_t i = context_start; i < context_start + window->text_count; ++i) {
 		next->glyphs[i].offset_x = old->glyphs[i].offset_x;
 		next->glyphs[i].offset_y = old->glyphs[i].offset_y;
 	}
@@ -3552,13 +3552,14 @@ bool skb_layout_try_edit_ascii(skb_layout_t* layout, skb_temp_alloc_t* temp_allo
 		memcpy(next->text_props + dst, source->text_props + src, count * sizeof(*next->text_props));
 		memcpy(next->clusters + dst, source->clusters + src, count * sizeof(*next->clusters));
 		memcpy(next->glyphs + dst, source->glyphs + src, count * sizeof(*next->glyphs));
-	}
-	for (int32_t i = 0; i < new_count; ++i) {
-		next->clusters[i].text_offset = i;
-		next->clusters[i].glyphs_offset = i;
-		next->glyphs[i].cluster_idx = i;
-		next->glyphs[i].offset_x = 0.f;
-		next->glyphs[i].offset_y = 0.f;
+		// The guarded layout is one glyph/cluster per codepoint. Copied spans
+		// whose source and destination match already have correct indexes.
+		if (src != dst)
+			for (int32_t i = dst; i < dst + counts[span]; ++i) {
+				next->clusters[i].text_offset = i;
+				next->clusters[i].glyphs_offset = i;
+				next->glyphs[i].cluster_idx = i;
+			}
 	}
 	skb__layout_build_context_t build_context = {0};
 	build_context.temp_alloc = temp_alloc;
@@ -3570,8 +3571,15 @@ bool skb_layout_try_edit_ascii(skb_layout_t* layout, skb_temp_alloc_t* temp_allo
 		? skb__reuse_ascii_line_geometry(next, layout, window,
 			context_start)
 		: skb__reuse_ascii_rows_with_stable_breaks(next, layout, window, delta);
-	if (!reused_lines)
+	if (!reused_lines) {
+		// Full reflow expects shaping-local origins. Successful geometry reuse
+		// overwrites changed origins itself and needs no preparatory clear pass.
+		for (int32_t i = 0; i < new_count; ++i) {
+			next->glyphs[i].offset_x = 0.f;
+			next->glyphs[i].offset_y = 0.f;
+		}
 		skb__layout_lines(&build_context, next);
+	}
 	next->generation = layout->generation == UINT64_MAX ? 1 : layout->generation + 1;
 	skb_layout_destroy(window);
 
