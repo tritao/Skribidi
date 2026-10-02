@@ -538,10 +538,10 @@ skb_text_position_t skb_rich_layout_hit_test(const skb_rich_layout_t* rich_layou
 	} else {
 		for (int32_t i = 0; i < rich_layout->paragraphs_count; i++) {
 			const skb_layout_paragraph_t* paragraph = &rich_layout->paragraphs[i];
-			const skb_layout_line_t* lines = skb_layout_get_lines(&paragraph->layout);
 			const int32_t lines_count = skb_layout_get_lines_count(&paragraph->layout);
 			for (int32_t j = 0; j < lines_count; j++) {
-				const skb_layout_line_t* line = &lines[j];
+				const skb_layout_line_t line_value = skb_layout_get_line_at(&paragraph->layout, j);
+				const skb_layout_line_t* line = &line_value;
 				const float bot_y = paragraph->offset.y + line->bounds.y + -line->ascender + line->descender;
 				if (hit_y < bot_y) {
 					hit_line_idx = j;

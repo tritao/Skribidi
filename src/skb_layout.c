@@ -4033,6 +4033,12 @@ const skb_layout_run_t* skb_layout_get_layout_runs(const skb_layout_t* layout)
 	return layout->layout_runs;
 }
 
+skb_layout_run_t skb_layout_get_layout_run_at(const skb_layout_t* layout, int32_t index)
+{
+	assert(layout && index >= 0 && index < layout->layout_runs_count);
+	return layout->layout_runs[index];
+}
+
 int32_t skb_layout_get_glyphs_count(const skb_layout_t* layout)
 {
 	assert(layout);
@@ -4225,6 +4231,12 @@ const skb_layout_line_t* skb_layout_get_lines(const skb_layout_t* layout)
 {
 	assert(layout);
 	return layout->lines;
+}
+
+skb_layout_line_t skb_layout_get_line_at(const skb_layout_t* layout, int32_t index)
+{
+	assert(layout && index >= 0 && index < layout->lines_count);
+	return layout->lines[index];
 }
 
 skb_attribute_set_t skb_layout_get_layout_run_attributes(const skb_layout_t* layout, const skb_layout_run_t* run)

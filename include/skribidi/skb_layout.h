@@ -678,6 +678,9 @@ SKB_API skb_text_property_t skb_layout_get_text_property_at(const skb_layout_t* 
 SKB_API int32_t skb_layout_get_layout_runs_count(const skb_layout_t* layout);
 /** @return const pointer to the layout runs. See skb_layout_get_layout_runs_count() to get number of glyph runs. */
 SKB_API const skb_layout_run_t* skb_layout_get_layout_runs(const skb_layout_t* layout);
+/** Returns a value at a valid index without exposing contiguous storage.
+ * layout must be non-NULL; index must be in the corresponding count range. */
+SKB_API skb_layout_run_t skb_layout_get_layout_run_at(const skb_layout_t* layout, int32_t index);
 
 /** @return number of glyphs in the layout. */
 SKB_API int32_t skb_layout_get_glyphs_count(const skb_layout_t* layout);
@@ -752,6 +755,9 @@ SKB_API const skb_decoration_t* skb_layout_get_decorations(const skb_layout_t* l
 SKB_API int32_t skb_layout_get_lines_count(const skb_layout_t* layout);
 /** @return const pointer to the lines. See skb_layout_get_lines_count() to get number of lines. */
 SKB_API const skb_layout_line_t* skb_layout_get_lines(const skb_layout_t* layout);
+/** Returns a value at a valid index without exposing contiguous storage.
+ * layout must be non-NULL; index must be in the corresponding count range. */
+SKB_API skb_layout_line_t skb_layout_get_line_at(const skb_layout_t* layout, int32_t index);
 
 /** @returns attribute set for specified layout run*/
 SKB_API skb_attribute_set_t skb_layout_get_layout_run_attributes(const skb_layout_t* layout, const skb_layout_run_t* run);

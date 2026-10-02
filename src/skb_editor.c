@@ -436,9 +436,10 @@ static int32_t skb__get_line_index(const skb_editor_t* editor, skb_paragraph_pos
 		// We should hit this only when the pos.offset is past the last line.
 		line_idx = lines_count - 1;
 	} else {
-		const skb_layout_line_t* lines = skb_layout_get_lines(skb__get_layout(editor, edit_pos.paragraph_idx));
+		const skb_layout_t* layout = skb__get_layout(editor, edit_pos.paragraph_idx);
 		for (int32_t i = 0; i < lines_count; i++) {
-			const skb_layout_line_t* line = &lines[i];
+			const skb_layout_line_t line_value = skb_layout_get_line_at(layout, i);
+			const skb_layout_line_t* line = &line_value;
 			if (edit_pos.text_offset < line->text_range.end) {
 				line_idx = i;
 				break;
@@ -977,8 +978,8 @@ skb_text_position_t skb_editor_get_line_start_at(const skb_editor_t* editor, skb
 	skb_paragraph_position_t paragraph_pos = skb_rich_text_get_paragraph_position_from_text_position(&editor->rich_text, text_pos, SKB_AFFINITY_USE);
 
 	int32_t edit_line_idx = skb__get_line_index(editor, paragraph_pos);
-	const skb_layout_line_t* lines = skb_layout_get_lines(skb__get_layout(editor, paragraph_pos.paragraph_idx));
-	const skb_layout_line_t* line = &lines[edit_line_idx];
+	const skb_layout_line_t line_value = skb_layout_get_line_at(skb__get_layout(editor, paragraph_pos.paragraph_idx), edit_line_idx);
+	const skb_layout_line_t* line = &line_value;
 
 	skb_text_position_t result = {
 		.offset = skb__get_global_text_offset(editor, paragraph_pos.paragraph_idx) + line->text_range.start,
@@ -996,8 +997,8 @@ skb_text_position_t skb_editor_get_line_end_at(const skb_editor_t* editor, skb_t
 	skb_paragraph_position_t paragraph_pos = skb_rich_text_get_paragraph_position_from_text_position(&editor->rich_text, text_pos, SKB_AFFINITY_USE);
 
 	int32_t edit_line_idx = skb__get_line_index(editor, paragraph_pos);
-	const skb_layout_line_t* lines = skb_layout_get_lines(skb__get_layout(editor, paragraph_pos.paragraph_idx));
-	const skb_layout_line_t* line = &lines[edit_line_idx];
+	const skb_layout_line_t line_value = skb_layout_get_line_at(skb__get_layout(editor, paragraph_pos.paragraph_idx), edit_line_idx);
+	const skb_layout_line_t* line = &line_value;
 
 	skb_text_position_t result = {
 		.offset = skb__get_global_text_offset(editor, paragraph_pos.paragraph_idx) + line->last_grapheme_offset,
@@ -1121,8 +1122,8 @@ static bool skb__is_past_end_of_line(const skb_editor_t* editor, skb_paragraph_p
 {
 	assert(skb__are_paragraphs_in_sync(editor));
 
-	const skb_layout_line_t* lines = skb_layout_get_lines(skb__get_layout(editor, paragraph_pos.paragraph_idx));
-	const skb_layout_line_t* line = &lines[line_idx];
+	const skb_layout_line_t line_value = skb_layout_get_line_at(skb__get_layout(editor, paragraph_pos.paragraph_idx), line_idx);
+	const skb_layout_line_t* line = &line_value;
 	return paragraph_pos.text_offset > line->last_grapheme_offset;
 }
 
@@ -1136,8 +1137,8 @@ static bool skb__is_rtl(const skb_editor_t* editor, skb_paragraph_position_t par
 		return layout_is_rtl;
 
 	const int32_t edit_line_idx = skb__get_line_index(editor, paragraph_pos);
-	const skb_layout_line_t* lines = skb_layout_get_lines(skb__get_layout(editor, paragraph_pos.paragraph_idx));
-	const skb_layout_line_t* line = &lines[edit_line_idx];
+	const skb_layout_line_t line_value = skb_layout_get_line_at(skb__get_layout(editor, paragraph_pos.paragraph_idx), edit_line_idx);
+	const skb_layout_line_t* line = &line_value;
 
 	if (paragraph_pos.text_offset > line->last_grapheme_offset)
 		return layout_is_rtl;
@@ -1219,8 +1220,8 @@ static skb_text_position_t skb__advance_forward(const skb_editor_t* editor, skb_
 	if (check_eol) {
 		const int32_t cur_edit_line_idx = skb__get_line_index(editor, cur_pos);
 		if (skb__is_at_last_line(editor, cur_pos, cur_edit_line_idx) && skb__is_past_end_of_line(editor, cur_pos, cur_edit_line_idx)) {
-			const skb_layout_line_t* lines = skb_layout_get_lines(skb__get_layout(editor, cur_pos.paragraph_idx));
-			const skb_layout_line_t* line = &lines[cur_edit_line_idx];
+			const skb_layout_line_t line_value = skb_layout_get_line_at(skb__get_layout(editor, cur_pos.paragraph_idx), cur_edit_line_idx);
+			const skb_layout_line_t* line = &line_value;
 			affinity = SKB_AFFINITY_EOL;
 			cur_pos.text_offset = line->last_grapheme_offset;
 		}
@@ -3069,8 +3070,8 @@ int32_t skb_editor_get_column_index_at(const skb_editor_t* editor, skb_text_posi
 	const skb_layout_t* layout = skb__get_layout(editor, paragraph_pos.paragraph_idx);
 	if (layout) {
 		const int32_t edit_line_idx = skb__get_line_index(editor, paragraph_pos);
-		const skb_layout_line_t* lines = skb_layout_get_lines(layout);
-		const skb_layout_line_t* line = &lines[edit_line_idx];
+		const skb_layout_line_t line_value = skb_layout_get_line_at(layout, edit_line_idx);
+		const skb_layout_line_t* line = &line_value;
 		return paragraph_pos.text_offset - line->text_range.start;
 	}
 
