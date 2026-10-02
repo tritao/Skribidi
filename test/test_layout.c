@@ -525,9 +525,37 @@ static int test_shared_rows(void)
 	return 0;
 }
 
+static int test_empty_final_line_hit_test(void)
+{
+	skb_temp_alloc_t* temp = skb_temp_alloc_create(1024);
+	skb_font_collection_t* fonts = skb_font_collection_create();
+	ENSURE(temp && fonts);
+	ENSURE(skb_font_collection_add_font(fonts, "data/IBMPlexSans-Regular.ttf", SKB_FONT_FAMILY_DEFAULT, NULL));
+	skb_layout_params_t params = { .font_collection = fonts, .layout_width = 200.f };
+	const char* values[] = { "", "\n", "abc\n", "abc\n\n" };
+	for (int i = 0; i < 4; ++i) {
+		skb_layout_t* layout = skb_layout_create_utf8(temp, &params, values[i], -1, (skb_attribute_set_t){0});
+		ENSURE(layout);
+		const int count = skb_layout_get_text_count(layout);
+		const int rows = skb_layout_get_lines_count(layout);
+		const float xs[] = { -100.f, 0.f, 100.f };
+		for (int x = 0; x < 3; ++x) {
+			skb_text_position_t hit = rows > 0
+				? skb_layout_hit_test_at_line(layout, SKB_MOVEMENT_CARET, rows - 1, xs[x])
+				: skb_layout_hit_test(layout, SKB_MOVEMENT_CARET, xs[x], 0.f);
+			ENSURE(skb_layout_get_offset_from_text_position(layout, hit) == count);
+		}
+		skb_layout_destroy(layout);
+	}
+	skb_font_collection_destroy(fonts);
+	skb_temp_alloc_destroy(temp);
+	return 0;
+}
+
 int layout_tests(void)
 {
 	RUN_SUBTEST(test_init);
+	RUN_SUBTEST(test_empty_final_line_hit_test);
 	RUN_SUBTEST(test_indexed_changed_wrap);
 	RUN_SUBTEST(test_incremental_row_work);
 	RUN_SUBTEST(test_shared_rows);

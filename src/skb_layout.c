@@ -4569,7 +4569,9 @@ skb_text_position_t skb__caret_prune_control_eol(const skb_layout_t* layout, con
 	if (layout->text_count > 0) {
 		// If the caret is at the leading edge of a control character and the end of line, move it to trailing.
 		// This is used for selection, mouse drag can place the caret at the "forbidden" location, but mouse click should not.
-		if ((caret.affinity == SKB_AFFINITY_LEADING || caret.affinity == SKB_AFFINITY_EOL) && caret.offset == line->last_grapheme_offset) {
+		// A final empty line names the document-end insertion position, not a character.
+		if ((caret.affinity == SKB_AFFINITY_LEADING || caret.affinity == SKB_AFFINITY_EOL) &&
+			caret.offset == line->last_grapheme_offset && caret.offset >= 0 && caret.offset < layout->text_count) {
 			if (skb__layout_text_property_at(layout, line->last_grapheme_offset).flags & SKB_TEXT_PROP_CONTROL) {
 				caret.affinity = SKB_AFFINITY_TRAILING;
 			}
