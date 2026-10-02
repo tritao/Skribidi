@@ -4052,7 +4052,8 @@ const skb_glyph_t* skb_layout_get_glyphs(const skb_layout_t* layout)
 	if (!layout->shape_cache->glyphs) {
 		skb_glyph_t* glyphs = skb_malloc((size_t)layout->glyphs_count * sizeof(*glyphs));
 		for (int32_t row = 0; row < layout->lines_count; ++row) {
-			const skb_layout_line_t* line = &layout->lines[row];
+			const skb_layout_line_t line_value = skb_layout_get_line_at(layout, row);
+			const skb_layout_line_t* line = &line_value;
 			float x = line->bounds.x;
 			for (int32_t i = line->text_range.start; i < line->text_range.end; ++i) {
 				glyphs[i] = skb__layout_shape_glyph_at(layout, i);
@@ -4080,9 +4081,11 @@ bool skb_layout_iterate_render_glyphs_range(const skb_layout_t* layout, skb_rang
 		return false;
 
 	for (int32_t line_idx = line_range.start; line_idx < line_range.end; line_idx++) {
-		const skb_layout_line_t* line = &layout->lines[line_idx];
+		const skb_layout_line_t line_value = skb_layout_get_line_at(layout, line_idx);
+		const skb_layout_line_t* line = &line_value;
 		for (int32_t run_idx = line->layout_run_range.start; run_idx < line->layout_run_range.end; run_idx++) {
-			const skb_layout_run_t* run = &layout->layout_runs[run_idx];
+			const skb_layout_run_t run_value = skb_layout_get_layout_run_at(layout, run_idx);
+			const skb_layout_run_t* run = &run_value;
 			if (run->type != SKB_CONTENT_RUN_UTF8 && run->type != SKB_CONTENT_RUN_UTF32)
 				continue;
 
@@ -4386,15 +4389,15 @@ int32_t skb_layout_get_line_index(const skb_layout_t* layout, skb_text_position_
 {
 	assert(layout);
 
-	int32_t line_idx = 0; // Default to first line, this should happen if pos.offset is before first line text_range.start.
-	for (int32_t i = layout->lines_count - 1; i >= 0; i--) {
-		if (pos.offset >= layout->lines[i].text_range.start) {
-			line_idx = i;
-			break;
-		}
+	// Find the last row starting at or before the offset, including duplicate
+	// starts. Preserve the first-row default for negative offsets/empty layouts.
+	int32_t lo = 0, hi = layout->lines_count;
+	while (lo < hi) {
+		const int32_t mid = lo + (hi - lo) / 2;
+		if (skb_layout_get_line_at(layout, mid).text_range.start <= pos.offset) lo = mid + 1;
+		else hi = mid;
 	}
-
-	return line_idx;
+	return lo > 0 ? lo - 1 : 0;
 }
 
 int32_t skb_layout_get_offset_from_text_position(const skb_layout_t* layout, skb_text_position_t pos)
@@ -4408,7 +4411,8 @@ int32_t skb_layout_get_offset_from_text_position(const skb_layout_t* layout, skb
 
 static skb_range_t skb__get_layout_run_text_range(const skb_layout_t* layout, int32_t run_idx)
 {
-	const skb_layout_run_t* layout_run = &layout->layout_runs[run_idx];
+	const skb_layout_run_t layout_run_value = skb_layout_get_layout_run_at(layout, run_idx);
+	const skb_layout_run_t* layout_run = &layout_run_value;
 	if (skb_range_is_empty(layout_run->cluster_range))
 		return (skb_range_t){0};
 
@@ -4428,9 +4432,11 @@ static int32_t skb__get_layout_run_index(const skb_layout_t* layout, skb_text_po
 		return SKB_INVALID_INDEX;
 
 	// Binary search the line which contains the text offset.
-	const int32_t line_idx = skb_ub_search(pos.offset,  &layout->lines[0].text_range.start, layout->lines_count,sizeof(skb_layout_line_t));
+	if (!layout->lines_count) return SKB_INVALID_INDEX;
+	const int32_t line_idx = skb_layout_get_line_index(layout, pos);
 
-	const skb_layout_line_t* line = &layout->lines[line_idx];
+	const skb_layout_line_t line_value = skb_layout_get_line_at(layout, line_idx);
+	const skb_layout_line_t* line = &line_value;
 	if (pos.offset >= line->text_range.start && pos.offset < line->text_range.end) {
 		for (int32_t ri = line->layout_run_range.start; ri < line->layout_run_range.end; ri++) {
 			const skb_range_t run_text_range = skb__get_layout_run_text_range(layout, ri);
@@ -4446,7 +4452,7 @@ skb_text_direction_t skb_layout_get_text_direction_at(const skb_layout_t* layout
 	assert(layout);
 	const int32_t run_idx = skb__get_layout_run_index(layout, pos);
 	if (run_idx != SKB_INVALID_INDEX)
-		return layout->layout_runs[run_idx].direction;
+		return skb_layout_get_layout_run_at(layout, run_idx).direction;
 	return layout->resolved_direction;
 }
 
@@ -4454,7 +4460,8 @@ skb_text_position_t skb_layout_hit_test_at_line(const skb_layout_t* layout, skb_
 {
 	assert(layout);
 
-	const skb_layout_line_t* line = &layout->lines[line_idx];
+	const skb_layout_line_t line_value = skb_layout_get_line_at(layout, line_idx);
+	const skb_layout_line_t* line = &line_value;
 
 	skb_text_position_t result = {0};
 
@@ -4523,7 +4530,8 @@ skb_text_position_t skb_layout_hit_test(const skb_layout_t* layout, skb_movement
 	// Find the row the hit position is at.
 	int32_t line_idx = layout->lines_count - 1;
 	for (int32_t i = 0; i < layout->lines_count; i++) {
-		skb_layout_line_t* line = &layout->lines[i];
+		const skb_layout_line_t line_value = skb_layout_get_line_at(layout, i);
+		const skb_layout_line_t* line = &line_value;
 		const float bot_y = line->bounds.y + -line->ascender + line->descender;
 		if (hit_y < bot_y) {
 			line_idx = i;
@@ -4540,13 +4548,15 @@ skb_layout_content_hit_t skb_layout_hit_test_content_at_line(const skb_layout_t*
 {
 	assert(layout);
 
-	const skb_layout_line_t* line = &layout->lines[line_idx];
+	const skb_layout_line_t line_value = skb_layout_get_line_at(layout, line_idx);
+	const skb_layout_line_t* line = &line_value;
 
 	skb_layout_content_hit_t result = { 0 };
 
 	if (hit_x > line->bounds.x && hit_x < (line->bounds.x + line->bounds.width)) {
 		for (int32_t ri = line->layout_run_range.start; ri < line->layout_run_range.end; ri++) {
-			const skb_layout_run_t* run = &layout->layout_runs[ri];
+			const skb_layout_run_t run_value = skb_layout_get_layout_run_at(layout, ri);
+			const skb_layout_run_t* run = &run_value;
 			if (hit_x < (run->bounds.x + run->bounds.width)) {
 				const intptr_t content_id = run->content_id;
 				if (content_id != 0) {
@@ -4575,7 +4585,8 @@ skb_layout_content_hit_t skb_layout_hit_test_content(const skb_layout_t* layout,
 	// Find the row the hit position is at.
 	int32_t line_idx = layout->lines_count - 1;
 	for (int32_t i = 0; i < layout->lines_count; i++) {
-		skb_layout_line_t* line = &layout->lines[i];
+		const skb_layout_line_t line_value = skb_layout_get_line_at(layout, i);
+		const skb_layout_line_t* line = &line_value;
 		const float bot_y = line->bounds.y + -line->ascender + line->descender;
 		if (hit_y < bot_y) {
 			line_idx = i;
@@ -4598,15 +4609,18 @@ void skb_layout_get_content_run_bounds_bounds_at_line_by_id(const skb_layout_t* 
 	if (line_idx < 0 || line_idx >= layout->lines_count)
 		return;
 
-	const skb_layout_line_t* line = &layout->lines[line_idx];
+	const skb_layout_line_t line_value = skb_layout_get_line_at(layout, line_idx);
+	const skb_layout_line_t* line = &line_value;
 
 	for (int32_t ri = line->layout_run_range.start; ri < line->layout_run_range.end; ri++) {
-		const skb_layout_run_t* run = &layout->layout_runs[ri];
+		const skb_layout_run_t run_value = skb_layout_get_layout_run_at(layout, ri);
+		const skb_layout_run_t* run = &run_value;
 		if (run->content_id == content_id) {
 			// Combine consecutive runs of same span into one rectangle.
 			skb_rect2_t rect = run->bounds;
-			while (ri+1 < line->layout_run_range.end && (int32_t)layout->layout_runs[ri+1].content_id == content_id) {
-				const skb_layout_run_t* next_run = &layout->layout_runs[ri+1];
+			while (ri+1 < line->layout_run_range.end && (int32_t)skb_layout_get_layout_run_at(layout, ri+1).content_id == content_id) {
+				const skb_layout_run_t next_run_value = skb_layout_get_layout_run_at(layout, ri+1);
+				const skb_layout_run_t* next_run = &next_run_value;
 				rect = skb_rect2_union(rect, next_run->bounds);
 				ri++;
 			}
@@ -4625,15 +4639,18 @@ void skb_layout_get_content_run_bounds_by_id(const skb_layout_t* layout, intptr_
 		return;
 
 	for (int32_t li = 0; li < layout->lines_count; li++) {
-		const skb_layout_line_t* line = &layout->lines[li];
+		const skb_layout_line_t line_value = skb_layout_get_line_at(layout, li);
+		const skb_layout_line_t* line = &line_value;
 
 		for (int32_t ri = line->layout_run_range.start; ri < line->layout_run_range.end; ri++) {
-			const skb_layout_run_t* run = &layout->layout_runs[ri];
+			const skb_layout_run_t run_value = skb_layout_get_layout_run_at(layout, ri);
+			const skb_layout_run_t* run = &run_value;
 			if (run->content_id == content_id) {
 				// Combine consecutive runs of same span into one rectangle.
 				skb_rect2_t rect = run->bounds;
-				while (ri+1 < line->layout_run_range.end && (int32_t)layout->layout_runs[ri+1].content_id == content_id) {
-					const skb_layout_run_t* next_run = &layout->layout_runs[ri+1];
+				while (ri+1 < line->layout_run_range.end && (int32_t)skb_layout_get_layout_run_at(layout, ri+1).content_id == content_id) {
+					const skb_layout_run_t next_run_value = skb_layout_get_layout_run_at(layout, ri+1);
+					const skb_layout_run_t* next_run = &next_run_value;
 					rect = skb_rect2_union(rect, next_run->bounds);
 					ri++;
 				}
@@ -4689,7 +4706,8 @@ skb_caret_info_t skb_layout_get_caret_info_at_line(const skb_layout_t* layout, i
 	if (line_idx < 0 || line_idx >= layout->lines_count)
 		return (skb_caret_info_t) { 0 };
 
-	const skb_layout_line_t* line = &layout->lines[line_idx];
+	const skb_layout_line_t line_value = skb_layout_get_line_at(layout, line_idx);
+	const skb_layout_line_t* line = &line_value;
 	pos = skb__sanitize_offset(layout, line, pos);
 
 	skb_caret_info_t caret_info = {
@@ -4702,8 +4720,9 @@ skb_caret_info_t skb_layout_get_caret_info_at_line(const skb_layout_t* layout, i
 	};
 
 	// Skip synthetic content
-	if (line->layout_run_range.start != line->layout_run_range.end && layout->layout_runs[line->layout_run_range.start].content_run_idx == SKB_INVALID_INDEX) {
-		const skb_layout_run_t* first_run = &layout->layout_runs[line->layout_run_range.start];
+	if (line->layout_run_range.start != line->layout_run_range.end && skb_layout_get_layout_run_at(layout, line->layout_run_range.start).content_run_idx == SKB_INVALID_INDEX) {
+		const skb_layout_run_t first_run_value = skb_layout_get_layout_run_at(layout, line->layout_run_range.start);
+		const skb_layout_run_t* first_run = &first_run_value;
 		caret_info.x += first_run->bounds.width;
 	}
 
@@ -4781,7 +4800,8 @@ skb_caret_info_t skb_layout_get_caret_info_at_line(const skb_layout_t* layout, i
 		int32_t min_diff = layout->text_count;
 
 		for (int32_t i = line->layout_run_range.start; i < line->layout_run_range.end; i++) {
-			const skb_layout_run_t* run = &layout->layout_runs[i];
+			const skb_layout_run_t run_value = skb_layout_get_layout_run_at(layout, i);
+			const skb_layout_run_t* run = &run_value;
 			// Skip markers and ellipsis as they dont have valid text range.
 			if (run->flags & (SKB_LAYOUT_RUN_IS_LIST_MARKER | SKB_LAYOUT_RUN_IS_ELLIPSIS))
 				continue;
@@ -4810,7 +4830,8 @@ skb_caret_info_t skb_layout_get_caret_info_at_line(const skb_layout_t* layout, i
 	}
 
 	if (layout_run_idx != SKB_INVALID_INDEX && glyph_idx != SKB_INVALID_INDEX) {
-		const skb_layout_run_t* layout_run = &layout->layout_runs[layout_run_idx];
+		const skb_layout_run_t layout_run_value = skb_layout_get_layout_run_at(layout, layout_run_idx);
+		const skb_layout_run_t* layout_run = &layout_run_value;
 		const float font_size = layout_run->font_size;
 		const skb_font_handle_t font_handle = layout_run->font_handle;
 
@@ -4851,7 +4872,8 @@ skb_text_position_t skb_layout_get_line_start_at(const skb_layout_t* layout, skb
 	const int32_t line_idx = skb_layout_get_line_index(layout, pos);
 	assert(line_idx >= 0 && line_idx < layout->lines_count);
 
-	const skb_layout_line_t* line = &layout->lines[line_idx];
+	const skb_layout_line_t line_value = skb_layout_get_line_at(layout, line_idx);
+	const skb_layout_line_t* line = &line_value;
 	skb_text_position_t result = {
 		.offset = line->text_range.start,
 		.affinity = SKB_AFFINITY_SOL,
@@ -4868,7 +4890,8 @@ skb_text_position_t skb_layout_get_line_end_at(const skb_layout_t* layout, skb_t
 	const int32_t line_idx = skb_layout_get_line_index(layout, pos);
 	assert(line_idx >= 0 && line_idx < layout->lines_count);
 
-	const skb_layout_line_t* line = &layout->lines[line_idx];
+	const skb_layout_line_t line_value = skb_layout_get_line_at(layout, line_idx);
+	const skb_layout_line_t* line = &line_value;
 	skb_text_position_t result = {
 		.offset = line->last_grapheme_offset,
 		.affinity = SKB_AFFINITY_EOL,
@@ -4884,7 +4907,8 @@ skb_text_position_t skb_layout_get_word_start_at(const skb_layout_t* layout, skb
 
 	const int32_t line_idx = skb_layout_get_line_index(layout, pos);
 	assert(line_idx >= 0 && line_idx < layout->lines_count);
-	const skb_layout_line_t* line = &layout->lines[line_idx];
+	const skb_layout_line_t line_value = skb_layout_get_line_at(layout, line_idx);
+	const skb_layout_line_t* line = &line_value;
 
 	pos = skb__sanitize_offset(layout, line, pos);
 
@@ -4916,7 +4940,8 @@ skb_text_position_t skb_layout_get_word_end_at(const skb_layout_t* layout, skb_t
 
 	const int32_t line_idx = skb_layout_get_line_index(layout, pos);
 	assert(line_idx >= 0 && line_idx < layout->lines_count);
-	const skb_layout_line_t* line = &layout->lines[line_idx];
+	const skb_layout_line_t line_value = skb_layout_get_line_at(layout, line_idx);
+	const skb_layout_line_t* line = &line_value;
 
 	pos = skb__sanitize_offset(layout, line, pos);
 
@@ -5001,7 +5026,8 @@ void skb_layout_iterate_text_range_bounds_with_offset(const skb_layout_t* layout
 	skb_range_t sel_range = skb_layout_get_offset_range_from_text_range(layout, text_range);
 
 	for (int32_t li = 0; li < layout->lines_count; li++) {
-		const skb_layout_line_t* line = &layout->lines[li];
+		const skb_layout_line_t line_value = skb_layout_get_line_at(layout, li);
+		const skb_layout_line_t* line = &line_value;
 		if (skb_range_overlap((skb_range_t){line->text_range.start, line->text_range.end}, sel_range)) {
 
 			skb_range_t rect_text_range = {0};
@@ -5011,7 +5037,8 @@ void skb_layout_iterate_text_range_bounds_with_offset(const skb_layout_t* layout
 			bool prev_is_right_adjacent = false;
 
 			for (int32_t ri = line->layout_run_range.start; ri < line->layout_run_range.end; ri++) {
-				const skb_layout_run_t* layout_run = &layout->layout_runs[ri];
+				const skb_layout_run_t layout_run_value = skb_layout_get_layout_run_at(layout, ri);
+				const skb_layout_run_t* layout_run = &layout_run_value;
 
 				skb_range_t cluster_range = layout_run->cluster_range;
 				int32_t cluster_range_delta = 1;
@@ -5181,7 +5208,8 @@ static bool skb__init_cluster_iter(skb_caret_iterator_t* iter)
 		return false;
 	}
 
-	const skb_layout_run_t* cur_layout_run = &layout->layout_runs[iter->layout_run_idx];
+	skb_layout_run_t cur_layout_run_value = skb_layout_get_layout_run_at(layout, iter->layout_run_idx);
+	const skb_layout_run_t* cur_layout_run = &cur_layout_run_value;
 	const skb_cluster_t cur_cluster_value = skb__layout_cluster_at(layout, iter->cluster_idx);
 	const skb_cluster_t* cur_cluster = &cur_cluster_value;
 	skb_range_t text_range = { .start = cur_cluster->text_offset, .end = cur_cluster->text_offset + cur_cluster->text_count };
@@ -5219,7 +5247,8 @@ skb_caret_iterator_t skb_caret_iterator_make(const skb_layout_t* layout, int32_t
 
 	const bool line_is_rtl = skb_is_rtl(layout->resolved_direction);
 	skb_caret_iterator_t iter = {0};
-	const skb_layout_line_t* line = &layout->lines[line_idx];
+	const skb_layout_line_t line_value = skb_layout_get_line_at(layout, line_idx);
+	const skb_layout_line_t* line = &line_value;
 
 	iter.layout = layout;
 	iter.line_first_grapheme_offset = line->text_range.start;
@@ -5234,12 +5263,13 @@ skb_caret_iterator_t skb_caret_iterator_make(const skb_layout_t* layout, int32_t
 	iter.layout_run_end = line->layout_run_range.end;
 
 	// Prune layout runs that cannot be selected. These are generated content like list markers or ellipsis, and does not affect the text range below.
-	if (iter.layout_run_idx != iter.layout_run_end && layout->layout_runs[iter.layout_run_idx].content_run_idx == SKB_INVALID_INDEX) {
-		const skb_layout_run_t* first_run = &layout->layout_runs[iter.layout_run_idx];
+	if (iter.layout_run_idx != iter.layout_run_end && skb_layout_get_layout_run_at(layout, iter.layout_run_idx).content_run_idx == SKB_INVALID_INDEX) {
+		const skb_layout_run_t first_run_value = skb_layout_get_layout_run_at(layout, iter.layout_run_idx);
+		const skb_layout_run_t* first_run = &first_run_value;
 		iter.x += first_run->bounds.width;
 		iter.layout_run_idx++;
 	}
-	if (iter.layout_run_idx != iter.layout_run_end && layout->layout_runs[iter.layout_run_end-1].content_run_idx == SKB_INVALID_INDEX)
+	if (iter.layout_run_idx != iter.layout_run_end && skb_layout_get_layout_run_at(layout, iter.layout_run_end-1).content_run_idx == SKB_INVALID_INDEX)
 		iter.layout_run_end--;
 
 	// Previous caret is at the start of the line.
@@ -5255,7 +5285,8 @@ skb_caret_iterator_t skb_caret_iterator_make(const skb_layout_t* layout, int32_t
 	iter.pending_left.glyph_idx = SKB_INVALID_INDEX;
 	iter.pending_left.cluster_idx = SKB_INVALID_INDEX;
 	if (iter.layout_run_idx != iter.layout_run_end) {
-		const skb_layout_run_t* first_run = &layout->layout_runs[iter.layout_run_idx];
+		const skb_layout_run_t first_run_value = skb_layout_get_layout_run_at(layout, iter.layout_run_idx);
+		const skb_layout_run_t* first_run = &first_run_value;
 		iter.pending_left.glyph_idx = first_run->glyph_range.start;
 		iter.pending_left.cluster_idx = skb_is_rtl(first_run->direction) ? first_run->cluster_range.end - 1 : first_run->cluster_range.start;
 		iter.x += first_run->padding.left;
@@ -5263,7 +5294,8 @@ skb_caret_iterator_t skb_caret_iterator_make(const skb_layout_t* layout, int32_t
 
 	// Iterate over clusters on the layout run.
 	if (iter.layout_run_idx != iter.layout_run_end) {
-		const skb_layout_run_t* first_run = &layout->layout_runs[iter.layout_run_idx];
+		const skb_layout_run_t first_run_value = skb_layout_get_layout_run_at(layout, iter.layout_run_idx);
+		const skb_layout_run_t* first_run = &first_run_value;
 		iter.cluster_idx = skb_is_rtl(first_run->direction) ? first_run->cluster_range.end - 1 : first_run->cluster_range.start;
 		iter.cluster_end = skb_is_rtl(first_run->direction) ? first_run->cluster_range.start - 1 : first_run->cluster_range.end;
 		iter.run_padding = first_run->padding.left;
@@ -5312,7 +5344,8 @@ bool skb_caret_iterator_next(skb_caret_iterator_t* iter, float* x, float* advanc
 		}
 		right->direction = layout->resolved_direction;
 		if (iter->layout_run_end != SKB_INVALID_INDEX) {
-			const skb_layout_run_t* cur_layout_run = &layout->layout_runs[iter->layout_run_end - 1];
+			skb_layout_run_t cur_layout_run_value = skb_layout_get_layout_run_at(layout, iter->layout_run_end - 1);
+			const skb_layout_run_t* cur_layout_run = &cur_layout_run_value;
 			right->layout_run_idx = iter->layout_run_end - 1;
 			right->glyph_idx = cur_layout_run->glyph_range.end - 1;
 			right->cluster_idx = skb_is_rtl(cur_layout_run->direction) ? cur_layout_run->cluster_range.end - 1 : cur_layout_run->cluster_range.start;
@@ -5324,7 +5357,8 @@ bool skb_caret_iterator_next(skb_caret_iterator_t* iter, float* x, float* advanc
 
 		iter->end_of_line = true;
 	} else {
-		const skb_layout_run_t* cur_layout_run = &layout->layout_runs[iter->layout_run_idx];
+		skb_layout_run_t cur_layout_run_value = skb_layout_get_layout_run_at(layout, iter->layout_run_idx);
+		const skb_layout_run_t* cur_layout_run = &cur_layout_run_value;
 
 		right->text_position.offset = iter->grapheme_pos;
 		right->text_position.affinity = skb_is_rtl(cur_layout_run->direction) ? SKB_AFFINITY_LEADING : SKB_AFFINITY_TRAILING; // LTR = trailing;
@@ -5375,7 +5409,7 @@ bool skb_caret_iterator_next(skb_caret_iterator_t* iter, float* x, float* advanc
 				iter->end_of_runs = iter->layout_run_idx == iter->layout_run_end;
 				if (!iter->end_of_runs) {
 					// Start new run
-					cur_layout_run = &layout->layout_runs[iter->layout_run_idx];
+					cur_layout_run_value = skb_layout_get_layout_run_at(layout, iter->layout_run_idx);
 					iter->cluster_idx = skb_is_rtl(cur_layout_run->direction) ? cur_layout_run->cluster_range.end - 1 : cur_layout_run->cluster_range.start;
 					iter->cluster_end = skb_is_rtl(cur_layout_run->direction) ? cur_layout_run->cluster_range.start - 1 : cur_layout_run->cluster_range.end;
 					iter->run_padding += cur_layout_run->padding.left;

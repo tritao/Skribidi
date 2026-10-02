@@ -177,11 +177,12 @@ static inline skb_glyph_t skb__layout_glyph_at(const skb_layout_t* layout, int32
 	int32_t lo = 0, hi = layout->lines_count;
 	while (lo < hi) {
 		const int32_t mid = lo + (hi - lo) / 2;
-		if (layout->lines[mid].text_range.end <= index) lo = mid + 1;
+		if (skb_layout_get_line_at(layout, mid).text_range.end <= index) lo = mid + 1;
 		else hi = mid;
 	}
 	assert(lo < layout->lines_count);
-	const skb_layout_line_t* line = &layout->lines[lo];
+	const skb_layout_line_t line_value = skb_layout_get_line_at(layout, lo);
+	const skb_layout_line_t* line = &line_value;
 	float x = line->bounds.x;
 	for (int32_t i = line->text_range.start; i < index; ++i)
 		x += skb__layout_shape_glyph_at(layout, i).advance_x;

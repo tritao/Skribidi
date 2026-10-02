@@ -447,6 +447,14 @@ static int test_incremental_row_work(void)
 		const skb_glyph_t a = skb_layout_get_glyph_at(edited, i), b = skb_layout_get_glyph_at(fresh, i);
 		ENSURE(a.gid == b.gid && fabsf(a.offset_x - b.offset_x) < .001f && fabsf(a.offset_y - b.offset_y) < .001f);
 	}
+	// Lookup keeps the original linear semantics at every offset and boundary.
+	for (int offset = -1; offset <= 4097; ++offset) {
+		int expected_row = 0;
+		for (int row = fresh->lines_count - 1; row >= 0; --row) {
+			if (fresh->lines[row].text_range.start <= offset) { expected_row = row; break; }
+		}
+		ENSURE(skb_layout_get_line_index(edited, (skb_text_position_t){.offset = offset}) == expected_row);
+	}
 	// A row-count change must not claim convergence at the old vertical positions.
 	skb_layout_t* tail = skb_layout_create_ascii_edit(original, temp, 2048, 2048, "wwwwwwww", 8);
 	ENSURE(tail && tail->reused_prefix_rows > 0 && tail->reused_suffix_rows == 0);
