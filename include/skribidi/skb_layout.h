@@ -583,6 +583,17 @@ SKB_API void skb_layout_set_utf8(
  * supported. Callers should rebuild normally in that case. Offsets count
  * Unicode codepoints; replacement_count is UTF-8 bytes or -1 for a C string.
  */
+/** Creates an owned edited generation without modifying the source layout.
+ * Uses the same guards and codepoint offsets as skb_layout_try_edit_ascii.
+ * Returns NULL on rejection; both success and rejection leave source intact.
+ * The result has independent arrays and must be destroyed by the caller.
+ * Referenced font/icon/attribute collections retain their normal caller-owned
+ * lifetime contract. This constructor does not yet share shaped-array storage.
+ */
+SKB_API skb_layout_t* skb_layout_create_ascii_edit(
+	const skb_layout_t* source, skb_temp_alloc_t* temp_alloc, int32_t start, int32_t end,
+	const char* replacement, int32_t replacement_count);
+
 SKB_API bool skb_layout_try_edit_ascii(
 	skb_layout_t* layout, skb_temp_alloc_t* temp_alloc, int32_t start, int32_t end,
 	const char* replacement, int32_t replacement_count);

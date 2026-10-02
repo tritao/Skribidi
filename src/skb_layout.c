@@ -3440,20 +3440,20 @@ static bool skb__reuse_ascii_rows_with_stable_breaks(skb_layout_t* next,
 	return true;
 }
 
-bool skb_layout_try_edit_ascii(skb_layout_t* layout, skb_temp_alloc_t* temp_alloc,
+skb_layout_t* skb_layout_create_ascii_edit(const skb_layout_t* layout, skb_temp_alloc_t* temp_alloc,
 	int32_t start, int32_t end, const char* replacement, int32_t replacement_count)
 {
 	if (!layout || !temp_alloc || !replacement || start < 0 || end < start ||
 		end > layout->text_count || !skb__one_ascii_glyph_per_codepoint(layout))
-		return false;
+		return NULL;
 	if (replacement_count < 0)
 		replacement_count = (int32_t)strlen(replacement);
 	if (replacement_count < 0 || replacement_count > 8 ||
 		layout->text_count > INT32_MAX - replacement_count)
-		return false;
+		return NULL;
 	for (int32_t i = 0; i < replacement_count; ++i)
 		if (replacement[i] < 'a' || replacement[i] > 'z')
-			return false;
+			return NULL;
 
 	const int32_t context_start = start > 16 ? start - 16 : 0;
 	const int32_t context_end = end <= layout->text_count - 16 ? end + 16 : layout->text_count;
@@ -3461,7 +3461,7 @@ bool skb_layout_try_edit_ascii(skb_layout_t* layout, skb_temp_alloc_t* temp_allo
 	const int32_t window_count = context_end - context_start + delta;
 	const int32_t new_count = layout->text_count + delta;
 	if (window_count <= 0 || new_count <= 0)
-		return false;
+		return NULL;
 	uint32_t* window_text = skb_malloc((size_t)window_count * sizeof(uint32_t));
 	for (int32_t i = context_start; i < start; ++i)
 		window_text[i - context_start] = layout->text[i];
@@ -3482,7 +3482,7 @@ bool skb_layout_try_edit_ascii(skb_layout_t* layout, skb_temp_alloc_t* temp_allo
 	if (!window || !skb__one_ascii_glyph_per_codepoint(window) ||
 		window->shaping_runs[0].font_handle != layout->shaping_runs[0].font_handle) {
 		skb_layout_destroy(window);
-		return false;
+		return NULL;
 	}
 	// The local end is an artificial end of input when unchanged text follows.
 	if (context_end < layout->text_count)
@@ -3492,14 +3492,14 @@ bool skb_layout_try_edit_ascii(skb_layout_t* layout, skb_temp_alloc_t* temp_allo
 	for (int32_t i = 0; i < left_guard; ++i)
 		if (!skb__same_ascii_seam(layout, context_start + i, window, i)) {
 			skb_layout_destroy(window);
-			return false;
+			return NULL;
 		}
 	for (int32_t i = 0; i < right_guard; ++i) {
 		const int32_t old_index = context_end - right_guard + i;
 		const int32_t window_index = window_count - right_guard + i;
 		if (!skb__same_ascii_seam(layout, old_index, window, window_index)) {
 			skb_layout_destroy(window);
-			return false;
+			return NULL;
 		}
 	}
 
@@ -3509,7 +3509,7 @@ bool skb_layout_try_edit_ascii(skb_layout_t* layout, skb_temp_alloc_t* temp_allo
 		layout_attribute_count != layout->params.layout_attributes.attributes_count) {
 		skb_layout_destroy(next);
 		skb_layout_destroy(window);
-		return false;
+		return NULL;
 	}
 	if (layout->attributes_count > layout_attribute_count) {
 		SKB_ARRAY_RESERVE(next->attributes, layout->attributes_count);
@@ -3583,6 +3583,16 @@ bool skb_layout_try_edit_ascii(skb_layout_t* layout, skb_temp_alloc_t* temp_allo
 	next->generation = layout->generation == UINT64_MAX ? 1 : layout->generation + 1;
 	skb_layout_destroy(window);
 
+	return next;
+}
+
+bool skb_layout_try_edit_ascii(skb_layout_t* layout, skb_temp_alloc_t* temp_alloc,
+	int32_t start, int32_t end, const char* replacement, int32_t replacement_count)
+{
+	skb_layout_t* next = skb_layout_create_ascii_edit(layout, temp_alloc,
+		start, end, replacement, replacement_count);
+	if (!next)
+		return false;
 	skb_layout_t previous = *layout;
 	*layout = *next;
 	skb_free(next);
