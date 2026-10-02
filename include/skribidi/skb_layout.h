@@ -586,9 +586,11 @@ SKB_API void skb_layout_set_utf8(
 /** Creates an owned edited generation without modifying the source layout.
  * Uses the same guards and codepoint offsets as skb_layout_try_edit_ascii.
  * Returns NULL on rejection; both success and rejection leave source intact.
- * The result has independent arrays and must be destroyed by the caller.
+ * The result has an independent lifetime and must be destroyed by the caller.
+ * Validated stable-row edits share immutable shape buffers. Mutable source
+ * rebuilds detach from shared buffers before writing.
  * Referenced font/icon/attribute collections retain their normal caller-owned
- * lifetime contract. This constructor does not yet share shaped-array storage.
+ * lifetime contract. Other accepted edits materialize for full line reflow.
  */
 SKB_API skb_layout_t* skb_layout_create_ascii_edit(
 	const skb_layout_t* source, skb_temp_alloc_t* temp_alloc, int32_t start, int32_t end,
