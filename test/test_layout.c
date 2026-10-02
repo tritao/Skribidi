@@ -7,6 +7,7 @@
 #include <time.h>
 #include "skribidi/skb_layout.h"
 #include "skribidi/skb_font_collection.h"
+#include "skb_layout_internal.h"
 
 static int test_init(void)
 {
@@ -364,9 +365,64 @@ static int test_long_wrapped_word(void)
 	return 0;
 }
 
+static int test_indexed_changed_wrap(void)
+{
+	skb_temp_alloc_t* temp = skb_temp_alloc_create(1024);
+	skb_font_collection_t* fonts = skb_font_collection_create();
+	ENSURE(skb_font_collection_add_font(fonts, "data/IBMPlexSans-Regular.ttf", SKB_FONT_FAMILY_DEFAULT, NULL));
+	for (int truncation = 0; truncation < 2; ++truncation) {
+		const skb_attribute_t attrs[] = {
+			skb_attribute_make_font_size(15.f),
+			skb_attribute_make_text_wrap(SKB_WRAP_WORD_CHAR),
+			skb_attribute_make_text_overflow(truncation ? SKB_OVERFLOW_ELLIPSIS : SKB_OVERFLOW_NONE),
+		};
+		skb_layout_params_t params = {
+			.font_collection = fonts, .layout_width = 143.f, .layout_height = 100000.f,
+			.layout_attributes = SKB_ATTRIBUTE_SET_FROM_STATIC_ARRAY(attrs),
+		};
+		char text[160];
+		memset(text, 'b', 128); text[128] = 0;
+		skb_layout_t* original = skb_layout_create_utf8(temp, &params, text, -1, (skb_attribute_set_t){0});
+		ENSURE(original);
+		ENSURE(!skb_layout_create_ascii_edit(original, temp, 32, 33, "W", 1));
+		const skb__shape_block_t* prefix = original->shape_block;
+		skb_layout_t* edited = skb_layout_create_ascii_edit(original, temp, 32, 33, "wwwwwwww", 8);
+		ENSURE(edited);
+		ENSURE((edited->shape_pieces_count > 0) == !truncation);
+		if (!truncation) {
+			ENSURE(edited->shape_pieces[0].block == prefix);
+			ENSURE(!edited->text && !edited->text_props && !edited->glyphs && !edited->clusters);
+		}
+		bool moved = edited->lines_count != original->lines_count;
+		for (int row = 0; row + 1 < original->lines_count && row + 1 < edited->lines_count; ++row)
+			moved |= edited->lines[row].text_range.end != original->lines[row].text_range.end;
+		ENSURE(moved);
+		skb_layout_destroy(original);
+		memmove(text + 40, text + 33, 96);
+		memcpy(text + 32, "wwwwwwww", 8);
+		skb_layout_t* fresh = skb_layout_create_utf8(temp, &params, text, -1, (skb_attribute_set_t){0});
+		ENSURE(fresh && edited->text_count == 135 && edited->lines_count == fresh->lines_count);
+		for (int i = 0; i < 135; ++i) {
+			const skb_glyph_t a = skb_layout_get_glyph_at(edited, i);
+			const skb_glyph_t b = skb_layout_get_glyph_at(fresh, i);
+			ENSURE(a.gid == b.gid && a.cluster_idx == b.cluster_idx && a.advance_x == b.advance_x);
+			ENSURE(fabsf(a.offset_x - b.offset_x) < .001f && fabsf(a.offset_y - b.offset_y) < .001f);
+		}
+		if (!truncation)
+			ENSURE(!edited->shape_cache->text && !edited->shape_cache->properties &&
+				!edited->shape_cache->glyphs && !edited->shape_cache->clusters);
+		skb_layout_destroy(edited);
+		skb_layout_destroy(fresh);
+	}
+	skb_font_collection_destroy(fonts);
+	skb_temp_alloc_destroy(temp);
+	return 0;
+}
+
 int layout_tests(void)
 {
 	RUN_SUBTEST(test_init);
+	RUN_SUBTEST(test_indexed_changed_wrap);
 	RUN_SUBTEST(test_long_wrapped_word);
 	RUN_SUBTEST(test_missing_script);
 	RUN_SUBTEST(test_render_glyph_iterator);

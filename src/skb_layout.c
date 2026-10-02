@@ -857,11 +857,11 @@ static float skb__calc_run_end_whitespace(const skb_layout_t* layout, skb_range_
 		// Prune space used by whitespace or control characters.
 		const skb_layout_run_t* start_run = &layout->layout_runs[run_range.start];
 		for (int32_t gi = start_run->glyph_range.start; gi < start_run->glyph_range.end; gi++) {
-			const skb_glyph_t* glyph = &layout->glyphs[gi];
-			const skb_cluster_t* cluster= &layout->clusters[glyph->cluster_idx];
-			if (cluster->text_count > 0) {
-				if ((layout->text_props[cluster->text_offset].flags & SKB_TEXT_PROP_WHITESPACE) || (layout->text_props[cluster->text_offset].flags & SKB_TEXT_PROP_CONTROL))
-					whitespace_width += glyph->advance_x;
+			const skb_glyph_t glyph = skb__layout_shape_glyph_at(layout, gi);
+			const skb_cluster_t cluster = skb__layout_cluster_at(layout, glyph.cluster_idx);
+			if (cluster.text_count > 0) {
+				if ((skb__layout_text_property_at(layout, cluster.text_offset).flags & SKB_TEXT_PROP_WHITESPACE) || (skb__layout_text_property_at(layout, cluster.text_offset).flags & SKB_TEXT_PROP_CONTROL))
+					whitespace_width += glyph.advance_x;
 				else
 					break;
 			}
@@ -870,11 +870,11 @@ static float skb__calc_run_end_whitespace(const skb_layout_t* layout, skb_range_
 		// Prune space used by whitespace or control characters.
 		const skb_layout_run_t* end_run = &layout->layout_runs[run_range.end - 1];
 		for (int32_t gi = end_run->glyph_range.end-1; gi >= end_run->glyph_range.start; gi--) {
-			const skb_glyph_t* glyph = &layout->glyphs[gi];
-			const skb_cluster_t* cluster= &layout->clusters[glyph->cluster_idx];
-			if (cluster->text_count > 0) {
-				if ((layout->text_props[cluster->text_offset].flags & SKB_TEXT_PROP_WHITESPACE) || (layout->text_props[cluster->text_offset].flags & SKB_TEXT_PROP_CONTROL))
-					whitespace_width += glyph->advance_x;
+			const skb_glyph_t glyph = skb__layout_shape_glyph_at(layout, gi);
+			const skb_cluster_t cluster = skb__layout_cluster_at(layout, glyph.cluster_idx);
+			if (cluster.text_count > 0) {
+				if ((skb__layout_text_property_at(layout, cluster.text_offset).flags & SKB_TEXT_PROP_WHITESPACE) || (skb__layout_text_property_at(layout, cluster.text_offset).flags & SKB_TEXT_PROP_CONTROL))
+					whitespace_width += glyph.advance_x;
 				else
 					break;
 			}
@@ -1085,9 +1085,9 @@ static void skb__update_glyph_range(const skb_layout_t* layout, skb_layout_run_t
 		int32_t glyph_end = 0;
 		for (int32_t i = layout_run->cluster_range.start;
 			i < layout_run->cluster_range.end; ++i) {
-			const skb_cluster_t* cluster = &layout->clusters[i];
-			glyph_start = skb_mini(glyph_start, cluster->glyphs_offset);
-			glyph_end = skb_maxi(glyph_end, cluster->glyphs_offset + cluster->glyphs_count);
+			const skb_cluster_t cluster = skb__layout_cluster_at(layout, i);
+			glyph_start = skb_mini(glyph_start, cluster.glyphs_offset);
+			glyph_end = skb_maxi(glyph_end, cluster.glyphs_offset + cluster.glyphs_count);
 		}
 		layout_run->glyph_range.start = glyph_start;
 		layout_run->glyph_range.end = glyph_end;
@@ -1248,11 +1248,11 @@ static skb_layout_run_t* skb__line_append_shaping_run_range(skb_layout_t* layout
 
 static float skb__get_cluster_width(const skb_layout_t* layout, int32_t shaping_run_idx, int32_t cluster_idx)
 {
-	const skb_cluster_t* cluster = &layout->clusters[cluster_idx];
+	const skb_cluster_t cluster = skb__layout_cluster_at(layout, cluster_idx);
 
 	float cluster_width = 0.f;
-	for (int32_t gi = 0; gi < cluster->glyphs_count; gi++)
-		cluster_width += layout->glyphs[cluster->glyphs_offset + gi].advance_x;
+	for (int32_t gi = 0; gi < cluster.glyphs_count; gi++)
+		cluster_width += skb__layout_shape_glyph_at(layout, cluster.glyphs_offset + gi).advance_x;
 
 	// Include run padding at the extrema.
 	const skb__shaping_run_t* shaping_run = &layout->shaping_runs[shaping_run_idx];
@@ -1704,10 +1704,10 @@ static bool skb__finalize_line(skb_layout_t* layout, skb_layout_line_t* line, bo
 	if (line->layout_run_range.start != line->layout_run_range.end) {
 		const skb_layout_run_t* first_layout_run = &layout->layout_runs[line->layout_run_range.start];
 		const skb_layout_run_t* last_layout_run = &layout->layout_runs[line->layout_run_range.end - 1];
-		const skb_cluster_t* first_cluster = &layout->clusters[first_layout_run->cluster_range.start];
-		const skb_cluster_t* last_cluster = &layout->clusters[last_layout_run->cluster_range.end - 1];
-		line->text_range.start = first_cluster->text_offset;
-		line->text_range.end = last_cluster->text_offset + last_cluster->text_count;
+		const skb_cluster_t first_cluster = skb__layout_cluster_at(layout, first_layout_run->cluster_range.start);
+		const skb_cluster_t last_cluster = skb__layout_cluster_at(layout, last_layout_run->cluster_range.end - 1);
+		line->text_range.start = first_cluster.text_offset;
+		line->text_range.end = last_cluster.text_offset + last_cluster.text_count;
 		// Find beginning of the last grapheme on the line (needed or caret positioning, etc).
 		line->last_grapheme_offset = skb_layout_align_grapheme_offset(layout, line->text_range.end - 1);
 	} else {
@@ -1843,7 +1843,7 @@ static bool skb__finalize_line(skb_layout_t* layout, skb_layout_line_t* line, bo
 				baseline_align_offset = -baseline;
 			}
 
-			for (int32_t gi = layout_run->glyph_range.start; gi < layout_run->glyph_range.end; gi++) {
+			for (int32_t gi = layout_run->glyph_range.start; !layout->shape_pieces_count && gi < layout_run->glyph_range.end; gi++) {
 				skb_glyph_t* glyph = &layout->glyphs[gi];
 				glyph->offset_y += baseline_align_offset;
 			}
@@ -2309,14 +2309,14 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 		while (!has_word_remainder && skb__shaping_run_cluster_iter_is_valid(&end_it, layout)) {
 
 			// Advance whole glyph cluster, cannot split in between.
-			const skb_cluster_t* cluster = &layout->clusters[end_it.cluster_idx];
+			const skb_cluster_t cluster = skb__layout_cluster_at(layout, end_it.cluster_idx);
 			float cluster_width = skb__get_cluster_width(layout, end_it.shaping_run_idx, end_it.cluster_idx);
 
-			const int cp_offset = cluster->text_offset + cluster->text_count - 1;
+			const int cp_offset = cluster.text_offset + cluster.text_count - 1;
 
 			// Handle tabs
 			bool codepoint_is_tab = false;
-			if (layout->text[cp_offset] == SKB_CHAR_HORIZONTAL_TAB && tab_stop_increment > 0.f) {
+			if (skb__layout_text_at(layout, cp_offset) == SKB_CHAR_HORIZONTAL_TAB && tab_stop_increment > 0.f) {
 				// Calculate the next tab stop.
 				const float cur_pos = cur_line->bounds.width + run_width + run_end_whitespace_width;
 				const float next_tab_stop = floorf((cur_pos + tab_stop_increment) / tab_stop_increment) * tab_stop_increment;
@@ -2331,7 +2331,8 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 				}
 
 				// Update glyph width to match the tab width.
-				const int32_t cluster_last_glyph_idx = cluster->glyphs_offset + cluster->glyphs_count - 1;
+				const int32_t cluster_last_glyph_idx = cluster.glyphs_offset + cluster.glyphs_count - 1;
+				assert(!layout->shape_pieces_count);
 				layout->glyphs[cluster_last_glyph_idx].advance_x = tab_width;
 				cluster_width = tab_width;
 				codepoint_is_tab = true;
@@ -2342,8 +2343,8 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 			// When the direction does not match, the space will be inside the line (not end of it), so we ignore that.
 			// Treat tab as non-whitespace so that it allocates space at the end of the line too.
 			const bool codepoint_is_rtl = skb_is_rtl(layout->shaping_runs[end_it.shaping_run_idx].direction);
-			const bool codepoint_is_whitespace = (layout->text_props[cp_offset].flags & SKB_TEXT_PROP_WHITESPACE);
-			const bool codepoint_is_control = (layout->text_props[cp_offset].flags & SKB_TEXT_PROP_CONTROL);
+			const bool codepoint_is_whitespace = (skb__layout_text_property_at(layout, cp_offset).flags & SKB_TEXT_PROP_WHITESPACE);
+			const bool codepoint_is_control = (skb__layout_text_property_at(layout, cp_offset).flags & SKB_TEXT_PROP_CONTROL);
 			if (codepoint_is_rtl == layout_is_rtl && (codepoint_is_whitespace || codepoint_is_control) && !codepoint_is_tab) {
 				run_end_whitespace_width += cluster_width;
 			} else {
@@ -2359,11 +2360,11 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 			// Advance to next cluster.
 			skb__shaping_run_cluster_iter_next(&end_it, layout);
 
-			if (layout->text_props[cp_offset].flags & SKB_TEXT_PROP_MUST_LINE_BREAK) {
+			if (skb__layout_text_property_at(layout, cp_offset).flags & SKB_TEXT_PROP_MUST_LINE_BREAK) {
 				must_break = true;
 				break;
 			}
-			if (layout->text_props[cp_offset].flags & SKB_TEXT_PROP_ALLOW_LINE_BREAK)
+			if (skb__layout_text_property_at(layout, cp_offset).flags & SKB_TEXT_PROP_ALLOW_LINE_BREAK)
 				break;
 		}
 
@@ -2586,11 +2587,13 @@ void skb__layout_lines(skb__layout_build_context_t* build_context, skb_layout_t*
 			}
 
 			for (int32_t j = layout_run->glyph_range.start; j < layout_run->glyph_range.end; j++) {
-				skb_glyph_t* glyph = &layout->glyphs[j];
-				glyph->offset_x += cur_x;
-				glyph->offset_y += line->baseline;
-				cur_x += glyph->advance_x;
-				layout_run->bounds.width += glyph->advance_x;
+				const float advance = skb__layout_shape_glyph_at(layout, j).advance_x;
+				if (!layout->shape_pieces_count) {
+					layout->glyphs[j].offset_x += cur_x;
+					layout->glyphs[j].offset_y += line->baseline;
+				}
+				cur_x += advance;
+				layout_run->bounds.width += advance;
 			}
 
 			if (layout_run->flags & SKB_LAYOUT_RUN_IS_LIST_MARKER) {
@@ -3758,7 +3761,15 @@ skb_layout_t* skb_layout_create_ascii_edit(const skb_layout_t* layout, skb_temp_
 	const bool reused_lines = skb__can_index_ascii_rows(layout) && (delta == 0
 		? skb__reuse_ascii_line_geometry(next, layout, window, context_start)
 		: skb__reuse_ascii_rows_with_stable_breaks(next, layout, window, delta));
-	if (!reused_lines) {
+	const skb_text_overflow_t overflow = skb_attributes_get_text_overflow(
+		layout->params.layout_attributes, layout->params.attribute_collection);
+	const bool indexed_reflow = skb__can_index_ascii_rows(layout) &&
+		((layout->params.flags & SKB_LAYOUT_PARAMS_IGNORE_OVERFLOW) ||
+		 overflow == SKB_OVERFLOW_NONE || overflow == SKB_OVERFLOW_SCROLL);
+	if (!reused_lines && indexed_reflow) {
+		// Immutable shape data supplies advances; finalized rows own positions.
+		skb__layout_lines(&build_context, next);
+	} else if (!reused_lines) {
 		skb__materialize_shape_for_reflow(next, false);
 		// Full reflow expects shaping-local origins. Successful geometry reuse
 		// overwrites changed origins itself and needs no preparatory clear pass.
