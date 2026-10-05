@@ -681,6 +681,7 @@ static void skb__itemize(skb__layout_build_context_t* build_context, skb_layout_
 							// Split run based on which font can be used.
 							int32_t font_run_start = text_range.start;
 							skb_font_handle_t cur_font_handle = 0;
+							bool coverage_fallback_requested = false;
 
 							for (int32_t j = text_range.start; j < text_range.end; j++) {
 								// Treat control characters are space for font selection, since fonts dont have glyphs for control chars.
@@ -693,6 +694,25 @@ static void skb__itemize(skb__layout_build_context_t* build_context, skb_layout_
 										if (skb_font_collection_font_has_codepoint(layout->params.font_collection, fonts[k], codepoint)) {
 											font_handle = fonts[k];
 											break;
+										}
+									}
+								}
+								// Script coverage does not imply coverage of every character (e.g. Hangul
+								// Jamo versus syllables). Resolve an on-demand fallback for missing glyphs.
+								if (!skb_font_collection_font_has_codepoint(layout->params.font_collection, font_handle, codepoint)
+									&& !coverage_fallback_requested && layout->params.font_collection->fallback_func) {
+									coverage_fallback_requested = true;
+									if (layout->params.font_collection->fallback_func(layout->params.font_collection,
+										hb_language_to_string(run_lang), script, font_family, layout->params.font_collection->fallback_context)) {
+										int32_t refreshed_count = skb_font_collection_match_fonts(layout->params.font_collection,
+											hb_language_to_string(run_lang), script, font_family, font_weight, font_style, font_stretch,
+											fonts, SKB_COUNTOF(fonts));
+										if (refreshed_count > 0) fonts_count = refreshed_count;
+										for (int32_t k = 0; k < fonts_count; k++) {
+											if (skb_font_collection_font_has_codepoint(layout->params.font_collection, fonts[k], codepoint)) {
+												font_handle = fonts[k];
+												break;
+											}
 										}
 									}
 								}

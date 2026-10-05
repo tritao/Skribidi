@@ -246,7 +246,7 @@ typedef struct skb_font_t skb_font_t;
 
 /**
  * Signature font fallback function callback.
- * The font fallback function is called when font selection fails. Use skb_font_collection_set_on_font_fallback() to set the callback.
+ * The font fallback function is called when font selection fails or matching fonts lack a character. Use skb_font_collection_set_on_font_fallback() to set the callback.
  * @param font_collection font collection to use.
  * @param lang language of the failed font selection.
  * @param script script of the failed font selection, use skb_script_to_iso15924_tag() to get ISO-15924 tag of the script.

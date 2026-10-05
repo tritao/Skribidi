@@ -23,6 +23,45 @@ static int test_init(void)
 	return 0;
 }
 
+typedef struct coverage_fallback_context_t {
+	int calls;
+	bool provide_font;
+} coverage_fallback_context_t;
+
+static bool coverage_fallback(skb_font_collection_t* fonts, const char* lang, uint8_t script,
+	uint8_t family, void* context)
+{
+	(void)lang; (void)script;
+	coverage_fallback_context_t* request = context;
+	request->calls++;
+	return request->provide_font && skb_font_collection_add_font(fonts,
+		"data/NotoColorEmoji-Regular.ttf", family, NULL) != 0;
+}
+
+static int test_missing_character_fallback(void)
+{
+	for (int provide_font = 0; provide_font < 2; provide_font++) {
+		skb_temp_alloc_t* temp = skb_temp_alloc_create(4096);
+		skb_font_collection_t* fonts = skb_font_collection_create();
+		// Emoji-family matching ignores script, so this is a valid match with no smile glyph.
+		ENSURE(skb_font_collection_add_font(fonts, "data/IBMPlexSans-Regular.ttf", SKB_FONT_FAMILY_EMOJI, NULL));
+		coverage_fallback_context_t context = {0, provide_font != 0};
+		skb_font_collection_set_on_font_fallback(fonts, coverage_fallback, &context);
+		skb_layout_params_t params = {.font_collection = fonts};
+		skb_attribute_t attributes[] = {skb_attribute_make_font_size(15.f)};
+		skb_layout_t* layout = skb_layout_create_utf8(temp, &params, "🙂🙂", -1,
+			SKB_ATTRIBUTE_SET_FROM_STATIC_ARRAY(attributes));
+		ENSURE(layout && skb_layout_get_glyphs_count(layout) == 2);
+		ENSURE(context.calls == 1);
+		const skb_glyph_t* glyphs = skb_layout_get_glyphs(layout);
+		for (int i = 0; i < 2; i++) ENSURE((glyphs[i].gid != 0) == context.provide_font);
+		skb_layout_destroy(layout);
+		skb_font_collection_destroy(fonts);
+		skb_temp_alloc_destroy(temp);
+	}
+	return 0;
+}
+
 static int test_missing_script(void)
 {
 	skb_temp_alloc_t* temp_alloc = skb_temp_alloc_create(1024);
@@ -561,6 +600,7 @@ int layout_tests(void)
 	RUN_SUBTEST(test_shared_rows);
 	RUN_SUBTEST(test_long_wrapped_word);
 	RUN_SUBTEST(test_missing_script);
+	RUN_SUBTEST(test_missing_character_fallback);
 	RUN_SUBTEST(test_render_glyph_iterator);
 	RUN_SUBTEST(test_mixed_rtl_glyph_range);
 	RUN_SUBTEST(test_caret_pos);
